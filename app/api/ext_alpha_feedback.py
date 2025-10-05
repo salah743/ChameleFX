@@ -1,0 +1,18 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from fastapi import APIRouter, Body, Query
+from chamelefx.alpha import feedback as fb
+
+router = APIRouter()
+
+@router.post("/alpha/feedback/preview")
+def alpha_feedback_preview(symbols: list[str] = Body(["EURUSD","GBPUSD","USDJPY"])):
+    return fb.preview(symbols)
+
+@router.post("/alpha/feedback/apply")
+def alpha_feedback_apply(symbols: list[str] = Body(["EURUSD","GBPUSD","USDJPY"])):
+    return fb.apply(symbols)
+
+@router.post("/alpha/feedback/reset")
+def alpha_feedback_reset():
+    return fb.reset_to_defaults()

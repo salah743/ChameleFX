@@ -1,0 +1,31 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from fastapi import APIRouter, Query
+from pathlib import Path
+import io
+
+router = APIRouter()
+ROOT = Path(__file__).resolve().parents[2]
+LOGS = ROOT / "data" / "logs"
+
+def _tail(path: Path, n: int=200)->str:
+    if not path.exists(): return ""
+    try:
+        # simple tail
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[-n:]
+        return "".join(lines)
+    except Exception:
+        return ""
+
+@router.get("/logs/tail")
+def logs_tail(source: str = Query("exec"), n: int = Query(200)):
+    LOGS.mkdir(parents=True, exist_ok=True)
+    fname = {
+        "exec": "execution.log",
+        "alpha":"alpha.log",
+        "risk": "risk.log",
+        "server":"server.log",
+    }.get(source, "server.log")
+    p = LOGS / fname
+    return {"ok": True, "source": source, "tail": _tail(p, n)}

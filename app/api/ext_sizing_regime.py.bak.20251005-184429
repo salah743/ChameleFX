@@ -1,0 +1,30 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body, Query
+from chamelefx.portfolio import sizing_regime as rs
+from chamelefx.portfolio import sizing as base
+
+router = APIRouter()
+
+@router.get("/sizing/regime/config")
+def get_cfg():
+    return {"ok": True, "config": rs.get_config()}
+
+@router.post("/sizing/regime/config")
+def set_cfg(cfg: dict = Body(...)):
+    return rs.set_config(cfg)
+
+@router.get("/sizing/regime/preview")
+def preview(symbol: str = Query("EURUSD"),
+           method: str = Query("kelly"),
+           clamp: float = Query(0.35),
+           signal: float = Query(1.0)):
+    try:
+        w_base = float(base.weight_from_signal(symbol=symbol, signal=signal, method=method, clamp=clamp))
+    except Exception:
+        w_base = 0.0
+    try:
+        from chamelefx.portfolio import sizing_regime_glue as g
+        w_adj = float(g.adjust_weight(symbol, w_base))
+    except Exception:
+        w_adj = w_base
+    return {"ok": True, "symbol": symbol, "base": w_base, "adjusted": w_adj}

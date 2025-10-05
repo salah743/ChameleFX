@@ -1,0 +1,235 @@
+{
+  "app": {
+    "name": "ChameleFX",
+    "env": "prod",
+    "timezone": "UTC",
+    "log_level": "INFO",
+    "data_root": "D:/ChameleFX",
+    "runtime_dir": "chamelefx/runtime",
+    "history_dir": "data/history",
+    "telemetry_dir": "data/telemetry",
+    "temp_dir": "data/tmp"
+  },
+
+  "api": {
+    "host": "127.0.0.1",
+    "port": 18124,
+    "reload": true,
+    "threads": 4,
+    "request_timeout_sec": 20
+  },
+
+  "mt5": {
+    "enabled": true,
+    "account_id": "",
+    "server": "",
+    "path": "",
+    "timeout_sec": 5,
+    "retry": {
+      "attempts": 3,
+      "backoff_sec": 1.0
+    }
+  },
+
+  "symbols": {
+    "universe": ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "US500", "NAS100"],
+    "base_currency": "USD",
+    "pip_map": {
+      "EURUSD": 0.0001,
+      "GBPUSD": 0.0001,
+      "USDJPY": 0.01,
+      "XAUUSD": 0.1,
+      "US500": 0.25,
+      "NAS100": 0.25
+    }
+  },
+
+  "execution": {
+    "max_spread_pips": 1.2,
+    "news_blackout": {
+      "enabled": true,
+      "pre_minutes": 10,
+      "post_minutes": 10,
+      "source": "runtime/news.csv"
+    },
+    "slippage_log": true,
+    "vwap_benchmark": true,
+    "is_benchmark": true,
+    "router": {
+      "pov_cap": 0.15,
+      "spread_guard": 0.6,
+      "child_size": 25000,
+      "venues": ["primary", "lp2", "ecn"],
+      "router_state_file": "chamelefx/runtime/router_state.json",
+      "tod_overrides_enabled": true
+    },
+    "twap": {
+      "enabled": true,
+      "child_ms": 4000,
+      "max_parallel": 1
+    },
+    "throttle": {
+      "max_orders_per_min": 30,
+      "burst": 10
+    }
+  },
+
+  "alpha": {
+    "features": {
+      "rsi": {"period": 14},
+      "trend": {"fast": 10, "slow": 50},
+      "carry": {"lookback": 30},
+      "revert": {"z_window": 20}
+    },
+    "ensemble": {
+      "weights": {"trend": 0.35, "rsi": 0.25, "revert": 0.20, "carry": 0.20},
+      "clip": 1.0
+    },
+    "weighting": {
+      "method_default": "kelly",
+      "kelly": {
+        "floor": 0.02,
+        "cap": 0.35
+      },
+      "vol_adjust": {
+        "lookback": 20,
+        "target_vol": 0.12
+      }
+    },
+    "regime": {
+      "enabled": true,
+      "state_file": "chamelefx/runtime/regime_state.json",
+      "config_file": "chamelefx/runtime/regime_config.json",
+      "bias": {
+        "use_bias": true,
+        "multipliers": {
+          "Calm": 1.05,
+          "Normal": 0.85,
+          "Turbulent": 0.60
+        }
+      }
+    }
+  },
+
+  "portfolio": {
+    "optimizer": {
+      "default_objective": "risk_parity",
+      "lookback": 200,
+      "max_weight": 0.5,
+      "long_only": true,
+      "fallback_databank": true
+    },
+    "rebalance": {
+      "enabled": true,
+      "drift_bps": 50.0,
+      "max_turnover": 0.10,
+      "max_per_symbol": 0.10,
+      "cooldown_min": 10,
+      "targets_cache": "chamelefx/runtime/portfolio_targets.json",
+      "state_file": "chamelefx/runtime/rebalance_state.json"
+    },
+    "correlation": {
+      "lookback": 100
+    },
+    "risk_budget": {
+      "per_symbol_max": 0.25,
+      "portfolio_vol_target": 0.10
+    }
+  },
+
+  "ops": {
+    "watchdog": {
+      "enabled": true,
+      "heartbeat_sec": 10
+    },
+    "guardrails": {
+      "state_file": "chamelefx/runtime/risk_state.json",
+      "max_dd_pct": 10.0,
+      "mode": "throttle",
+      "throttle_floor": 0.25,
+      "warn_frac": 0.5
+    },
+    "daily_halt": {
+      "enabled": true,
+      "dd_threshold_pct": 12.0
+    },
+    "dd_scale": {
+      "enabled": true,
+      "scale_curve": [[0.0, 1.0], [0.5, 0.7], [1.0, 0.4]]
+    },
+    "auto_disable_job": {
+      "enabled": true,
+      "day_of_week": "Saturday",
+      "hour_utc": 1
+    }
+  },
+
+  "institutional": {
+    "routing": {
+      "twap": true,
+      "queue": true
+    },
+    "audit": {
+      "weekly_export": true,
+      "path": "data/audit"
+    },
+    "capital": {
+      "rebalance": true
+    }
+  },
+
+  "backtester": {
+    "v3": {
+      "default_start": "2023-01-01",
+      "default_end": "2025-01-01",
+      "slippage_pips": 0.05,
+      "commission_per_million": 25.0,
+      "use_regime_bias": false,
+      "sizing_parity": true
+    },
+    "data": {
+      "csv_dir": "data/history",
+      "databank_fallback": true
+    }
+  },
+
+  "performance": {
+    "equity_file": "chamelefx/runtime/equity.json",
+    "summary_file": "chamelefx/runtime/perf_summary.json",
+    "rolling": {
+      "window_days": 30
+    },
+    "sparkline": {
+      "source": "live", 
+      "downsample": 200
+    }
+  },
+
+  "dashboard": {
+    "api_base": "http://127.0.0.1:18124",
+    "sequential_calls": true,
+    "alpha_tab": {
+      "max_rows": 50
+    },
+    "portfolio_tab": {
+      "show_optimizer": true
+    },
+    "blotter": {
+      "show_cxl_replace": true
+    },
+    "diagnostics": {
+      "attribution": true,
+      "stability_heatmap": true
+    }
+  },
+
+  "paths": {
+    "router_state": "chamelefx/runtime/router_state.json",
+    "risk_state": "chamelefx/runtime/risk_state.json",
+    "positions": "chamelefx/runtime/positions.json",
+    "account": "chamelefx/runtime/account.json",
+    "orders_recent": "chamelefx/runtime/orders_recent.json",
+    "symbols": "chamelefx/runtime/symbols.json",
+    "regime_config": "chamelefx/runtime/regime_config.json"
+  }
+}

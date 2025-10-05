@@ -1,0 +1,118 @@
+from __future__ import annotations
+import os, json, tkinter as tk
+from tkinter import ttk
+
+try:
+    import requests
+except Exception:
+    requests = None
+
+DEFAULT_ENDPOINTS = [
+    ("GET",  "/stats/summary"),
+    ("GET",  "/stats/summary_fast"),      # new, always fast
+    ("GET",  "/positions"),
+    ("GET",  "/orders/recent"),            # optional
+    ("GET",  "/news/blackout?symbol=EURUSD"),
+    ("GET",  "/news/blackout?symbol=GBPUSD"),
+    ("GET",  "/news/blackout?symbol=XAUUSD"),
+    ("POST", "/news/refresh"),
+    ("GET",  "/health"),
+    ("GET",  "/analytics/decay/status"),
+    ("GET",  "/databank/replay/status"),
+    ("GET",  "/routing/twap/config"),
+    ("GET",  "/portfolio/rebalance/config"),
+]
+
+def default_api_base():
+    # Prefer config.json if present
+    base = "http://127.0.0.1:18124"  # default updated to 18124
+    try:
+        cfgp = os.path.join(os.path.dirname(__file__), "..", "config.json")
+        cfgp = os.path.abspath(cfgp)
+        with open(cfgp, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        for path in (["app","api_base"], ["api","base"], ["api_base"], ["server","base_url"]):
+            cur = cfg
+            ok = True
+            for k in path:
+                if isinstance(cur, dict) and k in cur:
+                    cur = cur[k]
+                else:
+                    ok = False; break
+            if ok and isinstance(cur, str) and cur:
+                return cur
+    except Exception:
+        pass
+    return base
+
+class DumpBoard(tk.Frame):
+    """
+    Extremely simple board:
+      - API base input
+      - Refresh button + Copy All
+      - Giant Text area with pretty-printed JSON from important endpoints
+    """
+    def __init__(self, master, api_base_getter=None, endpoints=None):
+        super().__init__(master)
+        self.api_base_getter = api_base_getter or default_api_base
+        self.endpoints = endpoints or DEFAULT_ENDPOINTS
+
+        top = tk.Frame(self); top.pack(fill="x", padx=8, pady=6)
+        tk.Label(top, text="API Base:").pack(side="left")
+        self.base_var = tk.StringVar(value=self.api_base_getter() if callable(self.api_base_getter) else self.api_base_getter)
+        self.base_entry = tk.Entry(top, textvariable=self.base_var, width=50)
+        self.base_entry.pack(side="left", padx=6)
+        self.btn_refresh = tk.Button(top, text="Refresh", command=self.refresh_all)
+        self.btn_refresh.pack(side="left", padx=6)
+        self.btn_copy = tk.Button(top, text="Copy All", command=self.copy_all)
+        self.btn_copy.pack(side="left", padx=6)
+
+        self.txt = tk.Text(self, wrap="none")
+        self.txt.pack(fill="both", expand=True, padx=8, pady=(0,8))
+        self.scroll_y = tk.Scrollbar(self, orient="vertical", command=self.txt.yview)
+        self.txt.configure(yscrollcommand=self.scroll_y.set)
+        self.scroll_y.place(relx=1, rely=0, relheight=1, anchor="ne")
+
+        self.after(200, self.refresh_all)
+
+    def _http(self, method: str, url: str):
+        if not requests:
+            return {"error": "python-requests not installed"}
+        try:
+            if method == "GET":
+                r = requests.get(url, timeout=6.0)
+            else:
+                r = requests.post(url, json={}, timeout=6.0)
+            try:
+                data = r.json()
+            except Exception:
+                data = r.text
+            return {"status": r.status_code, "ok": r.ok, "data": data}
+        except Exception as e:
+            return {"error": repr(e)}
+
+    def refresh_all(self):
+        base = self.base_var.get().rstrip("/")
+        self.txt.delete("1.0", "end")
+        self._write_line(f"# DumpBoard - base={base}")
+        for method, path in self.endpoints:
+            url = base + path
+            self._write_line("")
+            self._write_line(f"## {method} {path}")
+            res = self._http(method, url)
+            pretty = json.dumps(res, indent=2, ensure_ascii=False) if not isinstance(res, str) else res
+            self._write_line(pretty)
+        self.txt.yview_moveto(0.0)
+
+    def _write_line(self, s: str):
+        try:
+            self.txt.insert("end", s + ("\n" if not s.endswith("\n") else ""))
+        except Exception:
+            pass
+
+    def copy_all(self):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self.txt.get("1.0","end-1c"))
+        except Exception:
+            pass

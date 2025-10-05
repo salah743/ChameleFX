@@ -1,0 +1,11 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+router = APIRouter()
+@router.post("/alpha/weight_from_signal")
+def weight_from_signal(symbol: str = Body("EURUSD"), weights: dict | None = Body(None), clamp: float = Body(0.35), params: dict | None = Body(None)):
+    # trivial sign-based weight as placeholder
+    w = 0.0
+    if weights and isinstance(weights, dict):
+        w = float(weights.get("signal", 0.0))
+    w = max(-clamp, min(clamp, w))
+    return {"ok": True, "symbol": symbol, "weight": w, "clamp": clamp, "src": "stub"}

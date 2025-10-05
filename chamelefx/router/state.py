@@ -1,0 +1,55 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+import json, time
+from pathlib import Path
+from typing import Dict, Any, List
+
+ROOT = Path(__file__).resolve().parents[2]
+TEL  = ROOT / "data" / "telemetry"
+STATE_FILE = TEL / "router_status.json"
+
+def _load()->Dict[str, Any]:
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"disabled": [], "cooldowns": {}, "enabled": 0, "total": 0, "ts": time.time()}
+
+def _save(d: Dict[str, Any]):
+    TEL.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    tmp.replace(STATE_FILE)
+
+def disable(venue: str, secs: int)->Dict[str, Any]:
+    st = _load()
+    if venue not in st.get("disabled", []):
+        st.setdefault("disabled", []).append(venue)
+    st.setdefault("cooldowns", {})[venue] = time.time() + float(secs)
+    st["ts"] = time.time()
+    _save(st)
+    return {"ok": True, "state": st}
+
+def enable(venue: str)->Dict[str, Any]:
+    st = _load()
+    if venue in st.get("disabled", []):
+        st["disabled"].remove(venue)
+    st.get("cooldowns", {}).pop(venue, None)
+    st["ts"] = time.time()
+    _save(st)
+    return {"ok": True, "state": st}
+
+def sweep()->Dict[str, Any]:
+    st = _load()
+    cd = st.get("cooldowns", {})
+    now = time.time()
+    changed = False
+    for v, t in list(cd.items()):
+        if now >= float(t):
+            # cooldown elapsed → re-enable
+            st["disabled"] = [x for x in st.get("disabled", []) if x != v]
+            cd.pop(v, None)
+            changed = True
+    if changed:
+        st["ts"] = time.time()
+        _save(st)
+    return {"ok": True, "state": st}

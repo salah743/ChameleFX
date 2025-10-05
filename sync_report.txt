@@ -1,0 +1,35 @@
+LIVE  : D:\ChameleFX
+BACKUP: D:\ChameleFX Backup
+SKIP(exists): D:\ChameleFX\app\api\server.py
+SKIP(exists): D:\ChameleFX\app\api\ext_orders_blotter.py
+SKIP(exists): D:\ChameleFX\app\api\ext_router_stats.py
+SKIP(exists): D:\ChameleFX\app\api\ext_alpha_features.py
+SKIP(exists): D:\ChameleFX\app\api\ext_alpha_weight.py
+SKIP(exists): D:\ChameleFX\app\api\ext_alpha_trade_live.py
+SKIP(exists): D:\ChameleFX\app\api\ext_perf_metrics.py
+SKIP(exists): D:\ChameleFX\chamelefx\manager.py
+SKIP(exists): D:\ChameleFX\chamelefx\setup_gui.py
+SKIP(exists): D:\ChameleFX\chamelefx\config.json
+SKIP(exists): D:\ChameleFX\chamelefx\alpha\features.py
+SKIP(exists): D:\ChameleFX\chamelefx\alpha\ensemble.py
+SKIP(exists): D:\ChameleFX\chamelefx\analytics\decay.py
+SKIP(exists): D:\ChameleFX\chamelefx\analytics\diagnostics.py
+SKIP(exists): D:\ChameleFX\chamelefx\execution\quality.py
+SKIP(exists): D:\ChameleFX\chamelefx\execution\twap.py
+SKIP(exists): D:\ChameleFX\chamelefx\portfolio\sizing.py
+SKIP(exists): D:\ChameleFX\chamelefx\portfolio\optimizer.py
+SKIP(exists): D:\ChameleFX\chamelefx\router\scorer.py
+SKIP(exists): D:\ChameleFX\chamelefx\ui\dashboard.py
+SKIP(exists): D:\ChameleFX\chamelefx\ui\alpha_tab.py
+SKIP(exists): D:\ChameleFX\chamelefx\ui\portfolio_tab.py
+SKIP(exists): D:\ChameleFX\chamelefx\ui\dumpboard.py
+SKIP(exists): D:\ChameleFX\chamelefx\performance\stats.py
+SKIP(exists): D:\ChameleFX\chamelefx\validation\backtester.py
+SKIP(exists): D:\ChameleFX\chamelefx\databank\loader.py
+SKIP(exists): D:\ChameleFX\chamelefx\integrations\mt5_client.py
+SKIP(exists): D:\ChameleFX\chamelefx\integrations\blotter_adapter.py
+SKIP(exists): D:\ChameleFX\chamelefx\runtime\account.json
+SKIP(exists): D:\ChameleFX\chamelefx\runtime\positions.json
+SKIP(exists): D:\ChameleFX\chamelefx\runtime\fills.json
+SKIP(exists): D:\ChameleFX\chamelefx\runtime\orders_recent.json
+PATCHED: D:\ChameleFX\app\api\server.py (future import preserved if present)

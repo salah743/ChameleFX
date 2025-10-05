@@ -1,0 +1,13 @@
+from __future__ import annotations
+from fastapi import APIRouter
+from chamelefx.ops import diag_snapshot as diag
+
+router = APIRouter()
+
+@router.get("/ops/diag/health")
+def ops_diag_health():
+    return diag.health()
+
+@router.get("/ops/diag/snapshot")
+def ops_diag_snapshot():
+    return diag.snapshot()

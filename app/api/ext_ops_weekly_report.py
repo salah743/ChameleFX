@@ -1,0 +1,22 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from chamelefx.utils.admin_gate import require_admin
+from fastapi import Depends
+from fastapi import APIRouter
+from pathlib import Path
+import json
+from chamelefx.ops import weekly_report as wr
+
+router = APIRouter(dependencies=[Depends(require_admin)])
+
+@router.post("/ops/weekly_report/run")
+def ops_weekly_report_run():
+    return wr.build_weekly()
+
+@router.get("/ops/weekly_report/latest")
+def ops_weekly_report_latest():
+    p = (Path(__file__).resolve().parents[2] / "chamelefx" / "runtime" / "reports" / "weekly_latest.json")
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"ok": False, "error": "no_weekly_report"}

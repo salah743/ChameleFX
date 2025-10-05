@@ -1,0 +1,202 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+# D:\ChameleFX\chamelefx\ui\alpha_tab.py
+
+import tkinter as tk
+from tkinter import ttk
+import json, os, threading
+
+try:
+    import requests
+except Exception:
+    requests = None
+
+def _default_base():
+    cfg_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
+    try:
+        with open(cfg_path,"r",encoding="utf-8") as f:
+            cfg = json.load(f)
+        return (
+            cfg.get("api",{}).get("base")
+            or cfg.get("app",{}).get("api_base")
+            or cfg.get("server",{}).get("base_url")
+            or "http://127.0.0.1:18124"
+        )
+    except Exception:
+        return "http://127.0.0.1:18124"
+
+class AlphaTab(tk.Frame):
+    def __init__(self, master, **kw):
+        # BATCH78_WEIGHTS_STATUS
+        try:
+            j = requests.get('http://127.0.0.1:18124/alpha/ensemble/weights', timeout=3).json()
+            wc = len(j.get('weights',{})) if isinstance(j, dict) else 0
+            ttk.Label(self, text=f"Ensemble weights: {wc} loaded").pack(anchor='w')
+        except Exception:
+            ttk.Label(self, text="Ensemble weights: n/a").pack(anchor='w')
+
+        super().__init__(master, **kw)
+
+        top = ttk.Frame(self); top.pack(fill="x", padx=8, pady=6)
+        ttk.Label(top, text="API Base:").pack(side="left")
+        self.api_entry = tk.StringVar(value=_default_base())
+        ttk.Entry(top, textvariable=self.api_entry, width=46).pack(side="left", padx=6)
+        ttk.Button(top, text="Run Alpha Once", command=self.run_once_async).pack(side="left", padx=6)
+        ttk.Button(top, text="Refresh", command=self.refresh_async).pack(side="left", padx=6)
+
+        self.status = ttk.Label(self, text=""); self.status.pack(anchor="w", padx=10, pady=(0,6))
+
+        cols = ("symbol","trend","rsi","revert","carry","signal")
+        self.tbl = ttk.Treeview(self, columns=cols, show="headings", height=12)
+        for c,w in zip(cols, (90,90,90,90,90,100)):
+            self.tbl.heading(c, text=c.upper()); self.tbl.column(c, width=w, anchor="center")
+        self.tbl.pack(fill="both", expand=True, padx=8, pady=6)
+
+        self.after(300, self.refresh_async)  # defer first call
+
+    # ------------- HTTP helpers -------------
+    def _get(self, path: str, timeout=2.5):
+        if not requests: return 599, {"error":"requests missing"}
+        try:
+            r = requests.get(self.api_entry.get(, timeout=5.0).rstrip("/") + path, timeout=timeout)
+            try: data = r.json()
+            except Exception: data = r.text
+            return r.status_code, data
+        except Exception as e:
+            return 599, {"error": repr(e)}
+
+    def _post(self, path: str, timeout=3.0):
+        if not requests: return 599, {"error":"requests missing"}
+        try:
+            r = requests.post(self.api_entry.get(, timeout=5.0).rstrip("/") + path, json={}, timeout=timeout)
+            try: data = r.json()
+            except Exception: data = r.text
+            return r.status_code, data
+        except Exception as e:
+            return 599, {"error": repr(e)}
+
+    def _normalize_signals(self, js):
+        if isinstance(js, dict) and "signals" in js: js = js["signals"]
+        if isinstance(js, dict):
+            return {k: v for k, v in js.items() if isinstance(v, dict)}
+        if isinstance(js, list):
+            out = {}
+            for item in js:
+                if isinstance(item, dict) and isinstance(item.get("symbol"), str):
+                    out[item["symbol"]] = {k:v for k,v in item.items() if k != "symbol"}
+            return out
+        return {}
+
+    # ------------- async actions -------------
+    def refresh_async(self):
+        def worker():
+            self.refresh()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run_once_async(self):
+        def worker():
+            code, _ = self._post("/alpha/run_once")
+            self.refresh()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _paint(self, code, sigs):
+        self.status.config(text=f"/alpha/signals → {code}")
+        for r in self.tbl.get_children(): self.tbl.delete(r)
+        for sym in sorted(sigs.keys()):
+            d = sigs.get(sym) or {}
+            def ff(k):
+                v = d.get(k, "")
+                try: return f"{float(v):.4f}"
+                except Exception: return str(v)
+            self.tbl.insert("", "end", values=(sym, ff("trend"), ff("rsi"), ff("revert"), ff("carry"), ff("signal")))
+
+    # ------------- new methods -------------
+    def refresh(self):
+        if not requests:
+            self.status.config(text="Error: 'requests' library not found.")
+            return
+
+        base = self.api_entry.get().strip()
+        try:
+            r = requests.get(f"{base}/alpha/bundle", timeout=3.0)
+            r.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            j = r.json()
+
+            if not j.get("ok"):
+                self.status.config(text=f"API returned 'ok': false. {j.get('error')}")
+                return
+
+            data = j.get("data", {})
+            sigs = data.get("signals", {})
+            facts = data.get("factors", {})
+            ens = data.get("ensemble", {})
+
+            self._fill_signals(sigs)
+            self._fill_factors(facts)
+            self._fill_ensemble(ens)
+
+        except requests.exceptions.RequestException as e:
+            self.status.config(text=f"Refresh failed: {e}")
+        except Exception as e:
+            self.status.config(text=f"An unexpected error occurred: {e}")
+
+    def _fill_signals(self, sigs):
+        self.status.config(text="Refreshing signals...")
+        for r in self.tbl.get_children():
+            self.tbl.delete(r)
+        
+        for sym in sorted(sigs.keys()):
+            d = sigs.get(sym) or {}
+            def ff(k):
+                v = d.get(k, "")
+                try: return f"{float(v):.4f}"
+                except Exception: return str(v)
+            self.tbl.insert("", "end", values=(sym, ff("trend"), ff("rsi"), ff("revert"), ff("carry"), ff("signal")))
+        self.status.config(text="Signals refreshed successfully.")
+
+    def _fill_factors(self, facts):
+        # Placeholder for filling factors data
+        pass
+
+    def _fill_ensemble(self, ens):
+        # Placeholder for filling ensemble data
+        pass
+    def refresh_regime(self):
+        import requests
+        sym = self.e_reg_sym.get().strip() if getattr(self,'e_reg_sym',None) else 'EURUSD'
+        try:
+            r = requests.post(self._base(, timeout=5.0)+"/regime/refresh", json={"symbol": sym}, timeout=4.0).json()
+        except Exception:
+            r = None
+        if r and r.get('ok'):
+            self.lbl_vol.config(text=f"vol={r.get('vol_regime','?')}")
+            self.lbl_tr.config(text=f"trend={r.get('trend','?')}")
+        else:
+            # fallback to status
+            try:
+                s = requests.get(self._base(, timeout=5.0)+"/regime/status", timeout=2.0).json()
+                if s and s.get('ok'):
+                    self.lbl_vol.config(text=f"vol={s.get('vol_regime','?')}")
+                    self.lbl_tr.config(text=f"trend={s.get('trend','?')}")
+            except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+\n        def weight_from_signal(self):
+        try:
+            import requests
+        except Exception:
+            return
+        sym = self._selected_symbol() if hasattr(self, '_selected_symbol') else 'EURUSD'
+        try:
+            w = float(self.e_weight.get() or 0.25)
+        except Exception:
+            w = 0.25
+        try:
+            pr = requests.post(self._base(, timeout=5.0) + "/sizing/regime/preview", json={"symbol": sym, "weight": w}, timeout=3.0).json()
+            lots = pr.get("lots", None)
+            if lots is not None and hasattr(self, 'e_lots_auto'):
+                self.e_lots_auto.configure(state='normal')
+                self.e_lots_auto.delete(0, 'end')
+                self.e_lots_auto.insert(0, f"{float(lots):.2f}")
+                self.e_lots_auto.configure(state='readonly')
+        except Exception:
+    get_logger(__name__).exception('Unhandled exception')

@@ -1,0 +1,38 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from fastapi import APIRouter, Body
+from typing import List, Dict, Any
+from chamelefx.backtest import parity as PAR
+from chamelefx.execution import slippage_cal as SC
+from chamelefx.backtest import walkforward as WF
+
+router = APIRouter()
+
+# --- Parity ---
+@router.post("/bt/parity/sizing")
+def bt_parity_sizing(signals: List[float] = Body(..., embed=True),
+                     method: str = Body("kelly", embed=True),
+                     clamp: float = Body(0.35, embed=True)):
+    return PAR.sizing_parity(signals, method=method, clamp=clamp, params={})
+
+# --- Slippage calibration ---
+@router.post("/exec/slippage/recalibrate")
+def exec_slippage_recalibrate(window: int = Body(200, embed=True),
+                              blend: float = Body(0.5, embed=True)):
+    return SC.calibrate(window=window, blend=blend)
+
+@router.get("/exec/slippage/model")
+def exec_slippage_model():
+    return SC.summary()
+
+# --- Walk-forward ---
+@router.post("/bt/walkforward/run")
+def bt_walkforward_run(symbols: List[str] = Body(None, embed=True),
+                       window: int = Body(None, embed=True),
+                       step: int = Body(None, embed=True),
+                       test: int = Body(None, embed=True)):
+    return WF.run(symbols=symbols, window=window, step=step, test=test)
+
+@router.get("/bt/walkforward/summary")
+def bt_walkforward_summary():
+    return WF.summary()

@@ -1,0 +1,97 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from typing import Dict, Any, List
+from pathlib import Path
+import json, statistics, time
+
+ROOT = Path(__file__).resolve().parents[1]
+RUN  = ROOT / "runtime"
+RUN.mkdir(parents=True, exist_ok=True)
+FILLS = RUN / "fills.json"
+COSTS = RUN / "router_costs.json"
+
+def _read_json(p: Path, default):
+    try: return json.loads(p.read_text(encoding="utf-8"))
+    except Exception: return default
+
+def _save_json(p: Path, data):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+def _fills() -> List[dict]:
+    rows = _read_json(FILLS, [])
+    if not isinstance(rows, list): rows = []
+    out = []
+    for r in rows:
+        if not isinstance(r, dict): continue
+        sym = str(r.get("symbol","")).upper()
+        if not sym: continue
+        try:
+            px  = float(r.get("price", 0.0))
+            qty = abs(float(r.get("qty", 0.0)))
+        except Exception:
+            continue
+        if px <= 0 or qty <= 0: continue
+        bench = float(r.get("bench", px))
+        side  = str(r.get("side","buy")).lower()
+        venue = str(r.get("venue","")).upper() or "DEFAULT"
+        bps = 0.0
+        if bench > 0:
+            sgn = 1.0 if side=="buy" else -1.0
+            bps = ((px - bench)/bench) * 10000.0 * sgn
+        out.append({"symbol":sym,"venue":venue,"qty":qty,"bps":bps})
+    return out
+
+def _bucket(notional: float) -> str:
+    n = float(notional)
+    if n <= 50_000: return "S"
+    if n <= 200_000: return "M"
+    return "L"
+
+def refresh() -> dict:
+    rows = _fills()
+    if not rows:
+        _save_json(COSTS, {"updated": time.time(), "symbols": {}})
+        return {"ok": True, "counts": 0, "symbols": 0}
+    agg: Dict[str, Dict[str, Dict[str, list]]] = {}
+    for r in rows:
+        sym, venue = r["symbol"], r["venue"]
+        b = _bucket(r["qty"])
+        agg.setdefault(sym, {}).setdefault(venue, {}).setdefault(b, []).append(float(r["bps"]))
+    table = {"updated": time.time(), "symbols": {}}
+    for sym, venues in agg.items():
+        table["symbols"][sym] = {}
+        for v, buckets in venues.items():
+            out = {}
+            for b, arr in buckets.items():
+                if not arr:
+                    out[b] = {"mean":0.0,"stdev":0.0,"p95":0.0,"n":0}
+                else:
+                    a = sorted(arr); n=len(a)
+                    mean = float(sum(a)/n)
+                    stdev = float((sum((x-mean)**2 for x in a)/n)**0.5) if n>1 else 0.0
+                    p95 = float(a[min(n-1, int(0.95*n))])
+                    out[b] = {"mean":mean,"stdev":stdev,"p95":p95,"n":n}
+            table["symbols"][sym][v] = out
+    _save_json(COSTS, table)
+    return {"ok": True, "counts": len(rows), "symbols": len(table["symbols"])}
+
+def summary() -> dict:
+    return _read_json(COSTS, {"updated": 0, "symbols": {}})
+
+def cost_penalty_bps(symbol: str, notional: float, venue: str | None = None, mode: str = "p95") -> float:
+    tab = summary()
+    sym = str(symbol).upper()
+    if sym not in tab.get("symbols", {}): return 0.0
+    ven = (venue or "DEFAULT").upper()
+    size = _bucket(notional)
+    vs = tab["symbols"][sym]
+    names = [ven] if ven in vs else list(vs.keys())
+    if not names: return 0.0
+    def pick(vname: str) -> float:
+        bx = vs[vname].get(size) or {}
+        if mode=="mean":  return float(bx.get("mean", 0.0))
+        if mode=="stdev": return float(bx.get("stdev", 0.0))
+        return float(bx.get("p95", 0.0))
+    vals = [pick(n) for n in names]
+    return float(vals[0] if ven in vs else min(vals) if vals else 0.0)

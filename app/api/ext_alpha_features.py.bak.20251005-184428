@@ -1,0 +1,32 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import Any, Dict, Optional
+from chamelefx.alpha.features import compute as feat_compute
+from chamelefx.alpha.ensemble import confidence
+
+router = APIRouter()
+
+@router.post("/alpha/features/compute")
+def alpha_features_compute(
+    symbol: Optional[str] = Body(None),
+    params: Optional[Dict[str, Any]] = Body(None),
+):
+    symbol = symbol or "EURUSD"
+    params = params or {}
+    return feat_compute(symbol, params)
+
+@router.post("/alpha/weight_from_signal")
+def alpha_weight_from_signal(
+    symbol: Optional[str] = Body(None),
+    weights: Optional[Dict[str, float]] = Body(None),
+    clamp: Optional[float] = Body(None),
+    params: Optional[Dict[str, Any]] = Body(None),
+):
+    symbol = symbol or "EURUSD"
+    params = params or {}
+    clamp = 0.35 if clamp is None else float(clamp)
+    f = feat_compute(symbol, params)
+    if not f.get("ok"):
+        return f
+    w = confidence(f.get("norm", {}), weights or None, clamp=clamp)
+    return {"ok": True, "symbol": symbol, "weight": w, "norm": f.get("norm"), "raw": f.get("raw")}

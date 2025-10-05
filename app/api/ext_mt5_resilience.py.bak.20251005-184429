@@ -1,0 +1,26 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from chamelefx.integrations import mt5_guard as g
+
+router = APIRouter()
+
+@router.get("/mt5/status")
+def mt5_status(): return g.status()
+
+@router.post("/mt5/reconnect")
+def mt5_reconnect(): return g.connect()
+
+@router.get("/mt5/heartbeat")
+def mt5_heartbeat(): return g.ping()
+
+@router.post("/mt5/order/place")
+def mt5_order_place(payload: dict = Body(...)): return g.place_order(payload)
+
+@router.post("/mt5/order/cancel")
+def mt5_order_cancel(broker_order_id: str = Body(..., embed=True)): return g.cancel_order(broker_order_id)
+
+@router.get("/mt5/outbox")
+def mt5_outbox(): return g.outbox()
+
+@router.post("/mt5/outbox/flush")
+def mt5_outbox_flush(max_items: int = Body(10, embed=True)): return g.flush_pending(max_items=max_items)

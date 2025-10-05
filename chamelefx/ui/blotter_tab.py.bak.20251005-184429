@@ -1,0 +1,81 @@
+from __future__ import annotations
+import tkinter as tk
+from tkinter import ttk, messagebox
+import json, requests
+from pathlib import Path
+
+API = "http://127.0.0.1:18124"
+
+class BlotterTab(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._build()
+
+    def _build(self):
+        top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=4)
+        ttk.Button(top, text="Refresh", command=self.refresh).pack(side="left")
+        ttk.Button(top, text="Cancel Selected", command=self.cancel_selected).pack(side="left", padx=6)
+        ttk.Button(top, text="Replace Size", command=self.replace_selected).pack(side="left", padx=6)
+
+        self.tree_open = ttk.Treeview(self, columns=("id","symbol","side","qty","price","ts"), show="headings", height=10)
+        for c,w in [("id",120),("symbol",80),("side",60),("qty",80),("price",90),("ts",160)]:
+            self.tree_open.heading(c, text=c.upper()); self.tree_open.column(c, width=w, anchor="center")
+        self.tree_open.pack(fill="both", expand=True, padx=6, pady=4)
+
+        ttk.Label(self, text="Recent Fills:").pack(anchor="w", padx=6)
+        self.tree_fills = ttk.Treeview(self, columns=("id","symbol","side","qty","price","ts"), show="headings", height=6)
+        for c,w in [("id",120),("symbol",80),("side",60),("qty",80),("price",90),("ts",160)]:
+            self.tree_fills.heading(c, text=c.upper()); self.tree_fills.column(c, width=w, anchor="center")
+        self.tree_fills.pack(fill="both", expand=True, padx=6, pady=4)
+
+        self.after(2000, self.refresh)
+
+    def _load(self, url):
+        try:
+            r = requests.get(url, timeout=2)
+            if r.ok: return r.json()
+        except Exception:
+            pass
+        return {"ok": False}
+
+    def refresh(self):
+        openo = self._load(f"{API}/orders/open")
+        fills = self._load(f"{API}/orders/recent")
+        # open orders
+        for i in self.tree_open.get_children(): self.tree_open.delete(i)
+        for o in (openo.get("orders") or []):
+            self.tree_open.insert("", "end", values=(o.get("id"), o.get("symbol"), o.get("side"), o.get("qty"), o.get("price"), o.get("ts")))
+        # recent fills
+        for i in self.tree_fills.get_children(): self.tree_fills.delete(i)
+        for o in (fills.get("fills") or []):
+            self.tree_fills.insert("", "end", values=(o.get("id"), o.get("symbol"), o.get("side"), o.get("qty"), o.get("price"), o.get("ts")))
+        self.after(4000, self.refresh)
+
+    def _selected_id(self):
+        sel = self.tree_open.selection()
+        if not sel: return None
+        vals = self.tree_open.item(sel[0]).get("values") or []
+        return vals[0] if vals else None
+
+    def cancel_selected(self):
+        oid = self._selected_id()
+        if not oid: return
+        try:
+            r = requests.post(f"{API}/orders/cancel", json={"order_id": oid}, timeout=2)
+            if not r.ok: messagebox.showwarning("Cancel", "Failed to cancel.")
+        except Exception:
+            pass
+
+    def replace_selected(self):
+        oid = self._selected_id()
+        if not oid: return
+        # naive replace prompt
+        import tkinter.simpledialog as sd
+        new_qty = sd.askstring("Replace Size", "New quantity:")
+        if not new_qty: return
+        try:
+            qty = float(new_qty)
+            r = requests.post(f"{API}/orders/replace", json={"order_id": oid, "new_qty": qty}, timeout=2)
+            if not r.ok: messagebox.showwarning("Replace", "Failed to replace.")
+        except Exception:
+            pass

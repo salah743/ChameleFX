@@ -1,0 +1,33 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+import tkinter as tk
+from tkinter import ttk
+import requests
+
+API = "http://127.0.0.1:18124"
+
+class LogsTab(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._build()
+
+    def _build(self):
+        controls = ttk.Frame(self); controls.pack(fill="x", padx=6, pady=4)
+        ttk.Label(controls, text="Source:").pack(side="left")
+        self.src = tk.StringVar(value="exec")
+        cb = ttk.Combobox(controls, textvariable=self.src, values=("exec","alpha","risk","server"), width=10)
+        cb.pack(side="left", padx=6)
+        ttk.Button(controls, text="Tail 200", command=self.refresh).pack(side="left")
+        self.txt = tk.Text(self, height=22)
+        self.txt.pack(fill="both", expand=True, padx=6, pady=4)
+        self.after(3000, self.refresh)
+
+    def refresh(self):
+        try:
+            r = requests.get(f"{API}/logs/tail?source={self.src.get(, timeout=5.0)}&n=200", timeout=2)
+            if r.ok:
+                self.txt.delete("1.0", "end")
+                self.txt.insert("end", r.json().get("tail",""))
+        except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+        self.after(4000, self.refresh)

@@ -1,0 +1,38 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import List, Optional
+import os, json
+from chamelefx.portfolio.optimizer import optimize
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+RUN  = os.path.join(ROOT, "runtime")
+os.makedirs(RUN, exist_ok=True)
+F_LAST = os.path.join(RUN, "portfolio_opt_last.json")
+
+router = APIRouter()
+
+def _write(p, j):
+    with open(p,"w",encoding="utf-8") as f: json.dump(j,f,indent=2)
+
+def _read(p, d=None):
+    try:
+        with open(p,"r",encoding="utf-8") as f: return json.load(f)
+    except Exception:
+        return d
+
+@router.post("/portfolio/opt/solve")
+def portfolio_opt_solve(symbols: List[str] = Body(..., embed=True),
+                        objective: str = Body("mean_variance"),
+                        lookback: int = Body(252),
+                        data_dir: Optional[str] = Body(None),
+                        long_only: bool = Body(True),
+                        max_weight: float = Body(0.35)):
+    res = optimize(symbols, data_dir=data_dir, lookback=lookback, objective=objective,
+                   long_only=long_only, max_weight=max_weight)
+    _write(F_LAST, res)
+    return res
+
+@router.get("/portfolio/opt/last")
+def portfolio_opt_last():
+    last=_read(F_LAST, None)
+    return last or {"ok": False, "error": "no_last"}

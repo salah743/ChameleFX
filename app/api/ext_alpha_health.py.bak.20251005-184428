@@ -1,0 +1,60 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import List
+from chamelefx.alpha import decay as AD
+from chamelefx.alpha import diagnostics as DG
+from chamelefx.performance import attribution as AT
+
+router = APIRouter()
+
+# --- Decay ---
+@router.post("/alpha/health/decay_record")
+def alpha_decay_record(
+    signal: str = Body(..., embed=True),
+    signal_value: float = Body(..., embed=True),
+    pnl: float = Body(..., embed=True),
+    window: int = Body(250, embed=True),
+):
+    return AD.record(signal, signal_value, pnl, window)
+
+@router.get("/alpha/health/decay_summary/{signal}")
+def alpha_decay_summary(signal: str, window: int = 250):
+    return AD.summary(signal, window)
+
+@router.get("/alpha/health/decay_summary_all")
+def alpha_decay_summary_all(window: int = 250):
+    return AD.summary_all(window)
+
+# --- Drift vs backtest ---
+@router.post("/alpha/health/drift_record")
+def alpha_drift_record(
+    model: str = Body(..., embed=True),
+    live_scores: List[float] = Body(..., embed=True),
+    backtest_scores: List[float] = Body(..., embed=True),
+    bins: int = Body(20, embed=True),
+):
+    return DG.record_distributions(model, live_scores, backtest_scores, bins)
+
+@router.get("/alpha/health/drift_summary/{model}")
+def alpha_drift_summary(model: str):
+    return DG.summary(model)
+
+@router.get("/alpha/health/drift_summary_all")
+def alpha_drift_summary_all():
+    return DG.summary_all()
+
+# --- Per-signal attribution ---
+@router.post("/alpha/diag/attrib_record")
+def alpha_attrib_record(
+    signal: str = Body(..., embed=True),
+    pnl: float = Body(..., embed=True),
+):
+    return AT.record(signal, pnl)
+
+@router.get("/alpha/diag/attrib_summary/{signal}")
+def alpha_attrib_summary(signal: str):
+    return AT.summary(signal)
+
+@router.get("/alpha/diag/attrib_summary_all")
+def alpha_attrib_summary_all():
+    return AT.summary_all()

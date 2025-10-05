@@ -1,0 +1,40 @@
+from __future__ import annotations
+from fastapi import APIRouter
+from pathlib import Path
+import importlib
+
+router = APIRouter()
+
+def _is_mounted(mod: str, alias: str) -> bool:
+    try:
+        importlib.import_module(mod)
+        return True
+    except Exception:
+        return False
+
+@router.get("/debug/health_deep")
+def health_deep():
+    base = Path(__file__).resolve().parents[2] / "chamelefx" / "runtime"
+    files = {
+        "account.json": (base / "account.json").exists(),
+        "positions.json": (base / "positions.json").exists(),
+        "fills.json": (base / "fills.json").exists(),
+        "orders_recent.json": (base / "orders_recent.json").exists(),
+    }
+    # MT5 availability flag from integrations
+    try:
+        from chamelefx.integrations import MT5_AVAILABLE  # type: ignore
+        mt5 = bool(MT5_AVAILABLE)
+    except Exception:
+        mt5 = False
+
+    routers = {
+        "blotter": _is_mounted("app.api.ext_orders_blotter", "blotter_router"),
+        "router_stats": _is_mounted("app.api.ext_router_stats", "router_stats_router"),
+        "alpha_features": _is_mounted("app.api.ext_alpha_features", "alpha_feat_router"),
+        "alpha_weight": _is_mounted("app.api.ext_alpha_weight", "alpha_weight_router"),
+        "alpha_trade_live": _is_mounted("app.api.ext_alpha_trade_live", "alpha_trade_live_router"),
+        "perf": _is_mounted("app.api.ext_perf_metrics", "perf_router"),
+        "validation_autopilot": _is_mounted("app.api.ext_validation_autopilot", "validation_autopilot_router"),
+    }
+    return {"ok": True, "runtime_files": files, "mt5_available": mt5, "routers_importable": routers}

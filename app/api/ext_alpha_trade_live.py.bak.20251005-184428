@@ -1,0 +1,50 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import Dict, Any
+import importlib
+
+router = APIRouter()
+
+def W():
+    # late import to avoid circulars
+    return importlib.import_module("chamelefx.alpha.weighting")
+
+def BR():
+    # orders bridge path
+    return importlib.import_module("chamelefx.app.api.orders_bridge")
+
+@router.post("/alpha/trade_live")
+def alpha_trade_live(
+    symbol: str = Body(..., embed=True),
+    side: str = Body("buy", embed=True),
+    method: str = Body("kelly", embed=True),
+    signal: float = Body(1.0, embed=True),
+    clamp: float = Body(0.35, embed=True),
+    params: Dict[str, Any] = Body({}, embed=True),
+):
+    # compute weight from signal
+    try:
+        w = float(W().weight_from_signal(signal, method=method, clamp=clamp, params=params))
+    except Exception:
+        w = 0.0
+    # place order
+    try:
+        return BR().place(symbol=symbol, side=side, weight=w, order_type="market")
+    except Exception as e:
+        return {"ok": False, "error": "bridge_failed", "detail": repr(e)}
+
+@router.post("/alpha/trade_live_biased")
+def alpha_trade_live_biased(
+    symbol: str = Body(..., embed=True),
+    side: str = Body("buy", embed=True),
+    base_weight: float = Body(0.10, embed=True),
+    bias: float = Body(1.0, embed=True),
+):
+    try:
+        w = float(base_weight) * float(bias)
+    except Exception:
+        w = 0.0
+    try:
+        return BR().place(symbol=symbol, side=side, weight=w, order_type="market")
+    except Exception as e:
+        return {"ok": False, "error": "bridge_failed", "detail": repr(e)}

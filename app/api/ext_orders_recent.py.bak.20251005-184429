@@ -1,0 +1,7 @@
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get('/orders_recent/ping')
+async def ping():
+    return {'ok': True, 'name': 'ext_orders_recent'}

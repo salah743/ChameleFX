@@ -1,0 +1,21 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body, Query
+from chamelefx.alpha import monitor as mon
+
+router = APIRouter()
+
+@router.post("/alpha/monitor/ingest")
+def alpha_mon_ingest(symbol: str = Body("EURUSD"),
+                     signal_value: float = Body(...),
+                     price: float | None = Body(None),
+                     window: int = Body(200),
+                     bt_mean_hint: float | None = Body(None)):
+    return mon.ingest(symbol=symbol, signal_value=signal_value, price=price, window=window, bt_mean_hint=bt_mean_hint)
+
+@router.get("/alpha/monitor/health")
+def alpha_mon_health(symbol: str = Query("EURUSD")):
+    return mon.health(symbol=symbol)
+
+@router.get("/alpha/monitor/regimes")
+def alpha_mon_regimes():
+    return mon.regimes()

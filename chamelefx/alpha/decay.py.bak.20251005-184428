@@ -1,0 +1,75 @@
+from __future__ import annotations
+import json, time, math, statistics
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "data" / "telemetry"
+FILE = DATA / "alpha_decay.json"
+
+def _load() -> Dict[str, Any]:
+    try:
+        return json.loads(FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"signals": {}, "ts": time.time()}
+
+def _save(x: Dict[str, Any]) -> None:
+    DATA.mkdir(parents=True, exist_ok=True)
+    tmp = FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(x, indent=2), encoding="utf-8")
+    tmp.replace(FILE)
+
+def _roll(arr: List[float], cap: int) -> List[float]:
+    return arr[-cap:] if cap and len(arr) > cap else arr
+
+def record(signal_name: str, signal_value: float, pnl: float, window: int = 250) -> Dict[str, Any]:
+    d = _load()
+    s = d["signals"].setdefault(signal_name, {"sig": [], "pnl": [], "samples": 0})
+    s["sig"]  = _roll(s.get("sig",[])  + [float(signal_value)], window)
+    s["pnl"]  = _roll(s.get("pnl",[])  + [float(pnl)], window)
+    s["samples"] = len(s["sig"])
+    d["ts"] = time.time()
+    _save(d)
+    return {"ok": True, "signal": signal_name, "samples": s["samples"]}
+
+def _safe_corr(a: List[float], b: List[float]) -> float:
+    try:
+        if len(a) < 3 or len(b) < 3: return 0.0
+        return float(statistics.correlation(a, b))
+    except Exception:
+        return 0.0
+
+def _safe_mean(x: List[float]) -> float:
+    return float(sum(x)/len(x)) if x else 0.0
+
+def _safe_std(x: List[float]) -> float:
+    try:
+        return float(statistics.pstdev(x)) if len(x) > 1 else 0.0
+    except Exception:
+        return 0.0
+
+def summary(signal_name: str, window: int = 250) -> Dict[str, Any]:
+    d = _load()
+    s = d.get("signals", {}).get(signal_name, {})
+    sig = s.get("sig", [])[-window:]
+    pnl = s.get("pnl", [])[-window:]
+    decay_corr = _safe_corr(sig, pnl)
+    pnl_mu = _safe_mean(pnl)
+    pnl_sd = _safe_std(pnl)
+    tstat = (pnl_mu / (pnl_sd / (len(pnl)**0.5))) if pnl and pnl_sd > 1e-12 else 0.0
+    return {
+        "ok": True,
+        "signal": signal_name,
+        "samples": len(sig),
+        "decay_corr": decay_corr,
+        "pnl_mean": pnl_mu,
+        "pnl_sd": pnl_sd,
+        "t_stat": tstat
+    }
+
+def summary_all(window: int = 250) -> Dict[str, Any]:
+    d = _load()
+    out = {}
+    for k in d.get("signals", {}).keys():
+        out[k] = summary(k, window)
+    return {"ok": True, "signals": out, "ts": d.get("ts",0)}

@@ -1,0 +1,69 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import Dict, Any
+from chamelefx.router import scorer as SC
+from chamelefx.router import state as RS
+from pathlib import Path
+import json, time
+
+router = APIRouter()
+
+@router.get("/router/smart/score")
+def router_smart_score(symbol: str = "EURUSD"):
+    return SC.score_venues(symbol)
+
+@router.get("/router/smart/decide")
+def router_smart_decide(symbol: str = "EURUSD"):
+    return SC.best_venue(symbol)
+
+@router.post("/router/smart/disable")
+def router_smart_disable(venue: str = Body(..., embed=True),
+                         cooldown_sec: int = Body(900, embed=True)):
+    return RS.disable(venue, cooldown_sec)
+
+@router.post("/router/smart/enable")
+def router_smart_enable(venue: str = Body(..., embed=True)):
+    return RS.enable(venue)
+
+@router.post("/router/smart/autotune")
+def router_smart_autotune(symbol: str = Body("EURUSD", embed=True),
+                          breach_bps: float = Body(5.0, embed=True)):
+    """
+    If symbol model slippage > breach_bps → disable worst venue for cooldown.
+    If below re-enable threshold → sweep + re-enable.
+    """
+    from pathlib import Path
+    ROOT = Path(__file__).resolve().parents[2]
+    TEL  = ROOT / "data" / "telemetry"
+    model = {}
+    try:
+        model = json.loads((TEL / "slippage_model.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    sym = (model.get("symbols", {}) or {}).get(symbol, {})
+    cur = float(sym.get("slippage_bps", 0.0))
+    # get best/worst from scores
+    sc = SC.score_venues(symbol)
+    scores = sc.get("scores", [])
+    if not scores:
+        return {"ok": False, "error": "no_venues"}
+    worst = sorted(scores, key=lambda x: x["slippage_bps"], reverse=True)[0]
+    # thresholds
+    from chamelefx.router.scorer import _cfg, _cooldown_sec, _reenable_thr_bps
+    conf = _cfg()
+    cooldown = _cooldown_sec(conf)
+    rethr = _reenable_thr_bps(conf)
+    actions = []
+    if cur > breach_bps:
+        RS.disable(worst["venue"], cooldown)
+        actions.append({"action":"disable", "venue":worst["venue"], "reason":"breach", "slippage_bps": cur})
+    else:
+        # try sweep/enables (in case model improved)
+        RS.sweep()
+        if cur <= rethr:
+            # opportunistic enable all
+            st = RS._load()
+            for v in list(st.get("disabled", [])):
+                RS.enable(v)
+                actions.append({"action":"enable", "venue":v, "reason":"model_ok", "slippage_bps": cur})
+    return {"ok": True, "slippage_bps": cur, "actions": actions}

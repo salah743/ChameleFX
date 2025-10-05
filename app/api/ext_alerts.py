@@ -1,0 +1,8 @@
+from chamelefx.log import get_logger
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get('/alerts')
+async def get_alerts():
+    return { 'ok': True, 'alerts': [] }

@@ -1,0 +1,271 @@
+# -*- coding: utf-8 -*-
+"""
+Bundle E (wiring): Customer metrics backed by real telemetry.
+- Replaces app/api/ext_customer_metrics.py with live readers.
+- Safely mounts router into app/api/server.py (after future-import block).
+- Idempotent.
+Sources used (all optional with graceful fallbacks):
+  data/telemetry:
+    - slippage_model.json
+    - walkforward.json
+    - alpha_decay.json
+    - alpha_drift.json
+    - alpha_attribution.json
+    - perf_summary.json  (if present)
+  chamelefx/runtime:
+    - account.json
+    - positions.json
+    - equity_series.json (if present)
+"""
+from __future__ import annotations
+import json, math, re, time, shutil
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+ROOT = Path(__file__).resolve().parents[2]
+API  = ROOT / "app" / "api"
+CFX  = ROOT / "chamelefx"
+TEL  = ROOT / "data" / "telemetry"
+RUN  = CFX / "runtime"
+
+def _w(p: Path, s: str):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(s, encoding="utf-8")
+
+def _backup(p: Path):
+    if p.exists():
+        shutil.copy2(p, p.with_suffix(p.suffix + f".bak.{int(time.time())}"))
+
+EXT = r'''
+from __future__ import annotations
+from fastapi import APIRouter
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+import json, math, time
+
+ROOT = Path(__file__).resolve().parents[2]
+TEL  = ROOT / "data" / "telemetry"
+RUN  = ROOT / "chamelefx" / "runtime"
+
+router = APIRouter()
+
+def _jload(p: Path, default):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+def _equity_last() -> float:
+    acct = _jload(RUN / "account.json", {})
+    if "equity" in acct:
+        try: return float(acct.get("equity", 0.0))
+        except: pass
+    # perf summary fallback
+    perf = _jload(TEL / "perf_summary.json", {})
+    if isinstance(perf, dict):
+        try: return float(perf.get("metrics", {}).get("equity_last", 0.0))
+        except: pass
+    # equity_series fallback
+    series = _jload(RUN / "equity_series.json", [])
+    if isinstance(series, list) and series:
+        try: return float(series[-1])
+        except: pass
+    return 0.0
+
+def _perf_kpis() -> Dict[str, float]:
+    # Primary: perf_summary.json if exists (produced by your perf API)
+    perf = _jload(TEL / "perf_summary.json", {})
+    if isinstance(perf, dict) and "metrics" in perf:
+        m = perf.get("metrics", {})
+        return {
+            "sharpe":     float(m.get("sharpe", 0.0)),
+            "max_dd":     float(m.get("max_dd", 0.0)),
+            "win_rate":   float(m.get("win_rate", 0.0)),
+            "expectancy": float(m.get("expectancy", 0.0)),
+            "equity_last": float(m.get("equity_last", 0.0)),
+        }
+    # Fallback: try to compute rough stats from equity_series.json (if present)
+    eq = _jload(RUN / "equity_series.json", [])
+    if isinstance(eq, list) and len(eq) >= 5:
+        try:
+            rets = []
+            for i in range(1, len(eq)):
+                p0 = float(eq[i-1]) if float(eq[i-1]) != 0 else 1.0
+                rets.append((float(eq[i]) / p0) - 1.0)
+            if not rets:
+                return {"sharpe":0.0,"max_dd":0.0,"win_rate":0.0,"expectancy":0.0,"equity_last": float(eq[-1])}
+            import statistics
+            mu = statistics.mean(rets)
+            sd = statistics.pstdev(rets) or 1e-9
+            sharpe = mu / sd
+            # max drawdown
+            peak = eq[0]
+            max_dd = 0.0
+            for x in eq:
+                if x > peak: peak = x
+                dd = (float(x) - float(peak)) / float(peak or 1.0)
+                if dd < max_dd: max_dd = dd
+            # win rate / expectancy
+            wins = sum(1 for r in rets if r > 0)
+            wr = wins / len(rets)
+            exp = statistics.mean(rets)
+            return {"sharpe":float(sharpe),"max_dd":float(max_dd),"win_rate":float(wr),"expectancy":float(exp),"equity_last": float(eq[-1])}
+        except Exception:
+            pass
+    # Last resort zeros
+    return {"sharpe":0.0,"max_dd":0.0,"win_rate":0.0,"expectancy":0.0,"equity_last":0.0}
+
+def _alpha_health() -> Dict[str, Any]:
+    decay = _jload(TEL / "alpha_decay.json", {})
+    drift = _jload(TEL / "alpha_drift.json", {})
+    attrib= _jload(TEL / "alpha_attribution.json", {})
+    # decay: decide bucket by t-stat (example thresholds)
+    tstat = None
+    try:
+        tstat = float(decay.get("tstat", decay.get("t_stat", None)))
+    except Exception:
+        tstat = None
+    if tstat is None:
+        decay_state = "UNKNOWN"
+    elif tstat >= 2.0:
+        decay_state = "OK"
+    elif tstat >= 1.0:
+        decay_state = "WARN"
+    else:
+        decay_state = "ALERT"
+    # drift: KL divergence or similar
+    kl = None
+    try:
+        kl = float(drift.get("kl", drift.get("kl_divergence", None)))
+    except Exception:
+        kl = None
+    if kl is None:
+        drift_state = "UNKNOWN"
+    elif kl < 0.02:
+        drift_state = "OK"
+    elif kl < 0.05:
+        drift_state = "WARN"
+    else:
+        drift_state = "ALERT"
+    # attribution: pick top/bottom 3 by pnl
+    top3, bottom3 = [], []
+    try:
+        items = attrib.get("signals", [])
+        # items like [{"name":"sigA","pnl": 123.4}, ...]
+        items = sorted(items, key=lambda x: float(x.get("pnl",0.0)))
+        bottom3 = [x.get("name","?") for x in items[:3]]
+        top3    = [x.get("name","?") for x in items[-3:]][::-1]
+    except Exception:
+        pass
+    return {"decay": decay_state, "drift": drift_state, "top3": top3, "bottom3": bottom3}
+
+def _exec_slip() -> float:
+    m = _jload(TEL / "slippage_model.json", {})
+    try:
+        syms = m.get("symbols", {})
+        if not syms: return 0.0
+        vals = [float(d.get("slippage_bps", 0.0)) for d in syms.values()]
+        return float(sum(vals)/max(1,len(vals)))
+    except Exception:
+        return 0.0
+
+def _venue_status() -> str:
+    # Try reading router status file if your stack writes one; fallback to counts
+    status = _jload(TEL / "router_status.json", {})
+    try:
+        enabled = int(status.get("enabled", 0))
+        total   = int(status.get("total", enabled))
+        return f"{enabled}/{total} enabled"
+    except Exception:
+        pass
+    # Fallback unknown
+    return "unknown"
+
+def _portfolio_drift() -> str:
+    # If your portfolio module wrote a drift summary, read it
+    pf = _jload(TEL / "portfolio_drift.json", {})
+    if isinstance(pf, dict) and "drift_bps" in pf:
+        bps = float(pf.get("drift_bps", 0.0))
+        if bps < 100: return "LOW"
+        if bps < 300: return "MEDIUM"
+        return "HIGH"
+    return "UNKNOWN"
+
+@router.get("/customer/metrics")
+def customer_metrics():
+    perf = _perf_kpis()
+    ah   = _alpha_health()
+    slip = _exec_slip()
+    ven  = _venue_status()
+    pfd  = _portfolio_drift()
+    return {
+        "equity": perf.get("equity_last", 0.0),
+        "sharpe": perf.get("sharpe", 0.0),
+        "max_dd": perf.get("max_dd", 0.0),
+        "win_rate": perf.get("win_rate", 0.0),
+        "expectancy": perf.get("expectancy", 0.0),
+        "decay": ah.get("decay", "UNKNOWN"),
+        "drift": ah.get("drift", "UNKNOWN"),
+        "top3": ah.get("top3", []),
+        "bottom3": ah.get("bottom3", []),
+        "slippage_bps": slip,
+        "venue_status": ven,
+        "portfolio_drift": pfd,
+        "ts": time.time(),
+    }
+'''
+
+def _place_after_future_block(txt: str, import_line: str) -> str:
+    lines = txt.splitlines()
+    # find leading __future__ block
+    i = 0
+    n = len(lines)
+    found = False
+    last_future = -1
+    while i < n and (lines[i].strip() == "" or lines[i].lstrip().startswith("#") or lines[i].startswith("\ufeff") or lines[i].startswith(("'''",'"""'))):
+        # handle module docstring block
+        if lines[i].lstrip().startswith(("'''",'\"\"\"')):
+            q = "'''" if lines[i].lstrip().startswith("'''") else '"""'
+            i += 1
+            while i < n and q not in lines[i]:
+                i += 1
+            if i < n:
+                i += 1
+            continue
+        i += 1
+    # now i is first non-blank/non-comment after docstring
+    j = i
+    while j < n and lines[j].strip().startswith("from __future__ import"):
+        last_future = j
+        j += 1
+    insert_idx = (last_future + 1) if last_future >= 0 else 0
+    if import_line in txt:
+        return txt
+    lines.insert(insert_idx, import_line)
+    return "\n".join(lines)
+
+def _append_include(txt: str, include_line: str) -> str:
+    if include_line in txt:
+        return txt
+    if not txt.endswith("\n"):
+        txt += "\n"
+    return txt + "\n" + include_line + "\n"
+
+def wire_server():
+    srv = API / "server.py"
+    if not srv.exists():
+        return
+    t = srv.read_text(encoding="utf-8")
+    t2 = _place_after_future_block(t, "from app.api.ext_customer_metrics import router as customer_metrics_router")
+    t2 = _append_include(t2, "app.include_router(customer_metrics_router)")
+    if t2 != t:
+        _backup(srv)
+        srv.write_text(t2, encoding="utf-8")
+
+def main():
+    _w(API / "ext_customer_metrics.py", EXT)
+    wire_server()
+    print("[BundleE] Customer metrics wired to telemetry and router mounted.")
+
+if __name__ == "__main__":
+    main()

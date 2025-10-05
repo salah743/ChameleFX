@@ -1,0 +1,8 @@
+from chamelefx.log import get_logger
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get('/mt5_router/ping')
+async def ping():
+    return {'ok': True, 'name': 'ext_mt5_router'}

@@ -1,0 +1,9 @@
+{
+  "api_url": "http://127.0.0.1:18123",
+  "api_token": "CHANGE-ME-TO-A-LONG-RANDOM-STRING",
+  "window_geometry": "1370x800+-27+84",
+  "last_shutdown": "2025-10-01T12:15:10.303770",
+  "components_exclude": [
+    "AuditExporter"
+  ]
+}

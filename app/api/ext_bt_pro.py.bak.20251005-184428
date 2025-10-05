@@ -1,0 +1,45 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import List, Dict, Any
+from chamelefx.backtest import walkforward as WF
+from chamelefx.backtest import parity as PR
+from chamelefx.backtest import fills as F
+
+router = APIRouter()
+
+# ---- Walk-forward pro ----
+@router.post("/btpro/wf/run")
+def btpro_wf_run(symbols: List[str] = Body(None, embed=True),
+                 window: int = Body(None, embed=True),
+                 step: int = Body(None, embed=True),
+                 test: int = Body(None, embed=True)):
+    return WF.run(symbols=symbols, window=window, step=step, test=test)
+
+@router.get("/btpro/wf/summary")
+def btpro_wf_summary():
+    return WF.summary()
+
+# ---- Parity expansion ----
+@router.post("/btpro/parity/sizing")
+def btpro_parity_sizing(signals: List[float] = Body(..., embed=True),
+                        method: str = Body("kelly", embed=True),
+                        clamp: float = Body(0.35, embed=True)):
+    return PR.sizing_parity(signals, method=method, clamp=clamp)
+
+@router.post("/btpro/parity/signal")
+def btpro_parity_signal(live: List[float] = Body(..., embed=True),
+                        bt:   List[float] = Body(..., embed=True)):
+    return PR.signal_parity(live, bt)
+
+@router.post("/btpro/parity/regime")
+def btpro_parity_regime(live_labels: List[str] = Body(..., embed=True),
+                        bt_labels:   List[str] = Body(..., embed=True)):
+    return PR.regime_parity(live_labels, bt_labels)
+
+# ---- Slippage-aware fills (utility) ----
+@router.post("/btpro/fill")
+def btpro_fill(price: float = Body(..., embed=True),
+               side: str    = Body(..., embed=True),
+               symbol: str  = Body("EURUSD", embed=True),
+               default_bps: float = Body(2.0, embed=True)):
+    return {"ok": True, "filled_price": F.apply_fill(price, side, symbol, default_bps)}

@@ -1,0 +1,451 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+# D:\ChameleFX\chamelefx\ui\dashboard.py
+
+import os, json, time, threading
+import tkinter as tk
+from chamelefx.ui.watchdog_bar import WatchdogBar
+from chamelefx.ui.guardrails_bar import GuardrailsBar
+from chamelefx.ui.regime_badge import RegimeBadge
+from chamelefx.ui.exec_quality_bar import ExecQualityBar
+from chamelefx.ui.customer_summary_bar import CustomerSummaryBar
+from chamelefx.ui.alpha_diag_panel import AlphaDiagPanel
+from chamelefx.ui.order_blotter_panel import OrderBlotterPanel
+from chamelefx.ui.portfolio_target_actual import PortfolioTargetActual
+from chamelefx.ui.portfolio_opt_panel import PortfolioOptPanel
+from chamelefx.ui.perf_sparkline import PerfSparkline
+from chamelefx.ui.exec_quality_panel import ExecQualityPanel
+from chamelefx.ui.ops_ribbon import OpsRibbon
+from chamelefx.ui.perf_widgets import PerfWidgets
+from chamelefx.ui.live_mt5_panel import LiveMT5Panel
+from tkinter import ttk
+
+# Optional deps
+try:
+    import requests
+except Exception:
+    requests = None
+
+try:
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except Exception:
+    Figure = None
+    FigureCanvasTkAgg = None
+
+# ---------------- Theme ----------------
+PALETTE = {
+    "bg": "#0f172a", "panel": "#111827", "card": "#0b1220",
+    "text": "#e5e7eb", "muted": "#9ca3af",
+    "green": "#10b981", "red": "#ef4444"
+}
+
+def _apply_theme(root: tk.Misc):
+    s = ttk.Style(root)
+    try: s.theme_use("clam")
+    except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+    s.configure("TFrame", background=PALETTE["bg"])
+    s.configure("TLabel", background=PALETTE["bg"], foreground=PALETTE["text"])
+    s.configure("TLabelframe", background=PALETTE["panel"], foreground=PALETTE["text"])
+    s.configure("TLabelframe.Label", background=PALETTE["panel"], foreground=PALETTE["muted"])
+    s.configure("TButton", background=PALETTE["card"], foreground=PALETTE["text"])
+    s.configure("Treeview", background=PALETTE["card"], fieldbackground=PALETTE["card"], foreground=PALETTE["text"])
+    s.configure("Ribbon.Big.TLabel", font=("Segoe UI", 13, "bold"))
+    s.configure("Ribbon.Small.TLabel", font=("Segoe UI", 10))
+    s.configure("StatusPillGreen.TLabel", background=PALETTE["green"], foreground="#06281c")
+    s.configure("StatusPillRed.TLabel", background=PALETTE["red"], foreground="#300")
+
+def _kv(parent, label, v="—", big=False):
+    frm = ttk.Frame(parent)
+    ttk.Label(frm, text=label, style="Ribbon.Small.TLabel").pack(side="top", anchor="w")
+    ttk.Label(frm, text=v, style="Ribbon.Big.TLabel" if big else "TLabel").pack(side="top", anchor="w")
+    return frm
+
+def _pill(parent, text, ok=True):
+    style = "StatusPillGreen.TLabel" if ok else "StatusPillRed.TLabel"
+    return ttk.Label(parent, text=text, style=style)
+
+def _safe_float(x, default=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+def _load_config_base() -> str:
+    default = "http://127.0.0.1:18124"
+    cfg_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        for path in (["app","api_base"], ["api","base"], ["api_base"], ["server","base_url"]):
+            cur, ok = cfg, True
+            for k in path:
+                if isinstance(cur, dict) and k in cur:
+                    cur = cur[k]
+                else:
+                    ok = False; break
+            if ok and isinstance(cur, str) and cur:
+                return cur
+    except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+    return default
+
+# ---------------- API ----------------
+class ApiClient:
+    def __init__(self, base: str):
+        self.base = base.rstrip("/")
+
+    def get(self, path: str, timeout: float = 2.5):
+        if not requests:
+            return 599, {"error": "python-requests not installed"}
+        try:
+            r = requests.get(self.base + path, timeout=timeout)
+            try:
+                data = r.json()
+            except Exception:
+                data = r.text
+            return r.status_code, data
+        except Exception as e:
+            return 599, {"error": repr(e)}
+
+    def post(self, path: str, payload=None, timeout: float = 3.0):
+        if not requests:
+            return 599, {"error": "python-requests not installed"}
+        try:
+            r = requests.post(self.base + path, json=payload or {}, timeout=timeout)
+            try:
+                data = r.json()
+            except Exception:
+                data = r.text
+            return r.status_code, data
+        except Exception as e:
+            return 599, {"error": repr(e)}
+
+# ---------------- Dashboard ----------------
+class CustomerDashboard(tk.Frame):
+    """
+    Themed, non-blocking customer view:
+      - KPI ribbon (Equity/Balance/Open PnL/Open Positions)
+      - Guardrails + News (EURUSD/GBPUSD/XAUUSD) pills
+      - Positions & Recent Orders tables
+      - Win/Loss stats
+      - Equity/Drawdown charts (from runtime/equity_history.json)
+    """
+    def __init__(self, master, api_base_getter=None, **kw):
+        super().__init__(master, **kw)
+        _apply_theme(self)
+
+        self._api_base_var = tk.StringVar(
+            value=(api_base_getter() if callable(api_base_getter) else _load_config_base())
+        )
+        self._auto = tk.BooleanVar(value=True)
+        self._stop = False
+        self._thread = None
+
+        # Top controls
+        top = ttk.Frame(self); top.pack(fill="x", padx=12, pady=10)
+        ttk.Label(top, text="API Base:").pack(side="left")
+        ttk.Entry(top, textvariable=self._api_base_var, width=45).pack(side="left", padx=8)
+        ttk.Button(top, text="Refresh", command=self.refresh_all_async).pack(side="left", padx=8)
+        ttk.Checkbutton(top, text="Auto-refresh (5s)", variable=self._auto, command=self._ensure_loop).pack(side="left", padx=8)
+
+        # KPI ribbon
+        ribbon = ttk.Frame(self); ribbon.pack(fill="x", padx=12, pady=(0,12))
+        self.k_equity = _kv(ribbon, "Equity", "—", big=True); self.k_equity.pack(side="left", padx=16)
+        self.k_balance = _kv(ribbon, "Balance", "—", big=True); self.k_balance.pack(side="left", padx=16)
+        self.k_pnl = _kv(ribbon, "Open PnL", "—", big=True); self.k_pnl.pack(side="left", padx=16)
+        self.k_pos = _kv(ribbon, "Open Positions", "0", big=True); self.k_pos.pack(side="left", padx=16)
+
+        # Pills
+        pills = ttk.Frame(self); pills.pack(fill="x", padx=12, pady=(0,12))
+        self.p_guard = _pill(pills, "Guardrails: OK", ok=True);  self.p_guard.pack(side="left", padx=8)
+        self.p_eu = _pill(pills, "EURUSD: CLEAR", ok=True);      self.p_eu.pack(side="left", padx=8)
+        self.p_gu = _pill(pills, "GBPUSD: CLEAR", ok=True);      self.p_gu.pack(side="left", padx=8)
+        self.p_xa = _pill(pills, "XAUUSD: CLEAR", ok=True);      self.p_xa.pack(side="left", padx=8)
+
+        # Split: left tables / right charts+stats
+        center = ttk.Panedwindow(self, orient="horizontal"); center.pack(fill="both", expand=True, padx=12, pady=(0,12))
+
+        # Left (positions + orders)
+        left = ttk.Panedwindow(center, orient="vertical")
+        pos_box = ttk.Labelframe(left, text="Open Positions")
+        cols_p = ("ticket","symbol","side","lots","entry","sl","tp","pnl")
+        self.tbl_positions = ttk.Treeview(pos_box, columns=cols_p, show="headings", height=7)
+        for c,w in zip(cols_p,(90,80,60,60,90,90,90,90)):
+            self.tbl_positions.heading(c, text=c.upper())
+            self.tbl_positions.column(c, width=w, anchor="center")
+        sy = ttk.Scrollbar(pos_box, orient="vertical", command=self.tbl_positions.yview)
+        self.tbl_positions.configure(yscrollcommand=sy.set)
+        self.tbl_positions.pack(side="left", fill="both", expand=True); sy.pack(side="left", fill="y")
+        left.add(pos_box, weight=1)
+
+        ord_box = ttk.Labelframe(left, text="Recent Orders")
+        cols_o = ("id","symbol","type","side","lots","price","time","pnl")
+        self.tbl_orders = ttk.Treeview(ord_box, columns=cols_o, show="headings", height=7)
+        for c,w in zip(cols_o,(90,80,70,60,60,90,160,80)):
+            self.tbl_orders.heading(c, text=c.upper())
+            self.tbl_orders.column(c, width=w, anchor="center")
+        sy2 = ttk.Scrollbar(ord_box, orient="vertical", command=self.tbl_orders.yview)
+        self.tbl_orders.configure(yscrollcommand=sy2.set)
+        self.tbl_orders.pack(side="left", fill="both", expand=True); sy2.pack(side="left", fill="y")
+        left.add(ord_box, weight=1)
+
+        center.add(left, weight=2)
+
+        # Right (stats + charts)
+        right = ttk.Panedwindow(center, orient="vertical")
+
+        stats_box = ttk.Labelframe(right, text="Trade Stats (last 50)")
+        self.lbl_trades = ttk.Label(stats_box, text="Trades: 0"); self.lbl_trades.pack(anchor="w", padx=10, pady=2)
+        self.lbl_win = ttk.Label(stats_box, text="Winners: 0"); self.lbl_win.pack(anchor="w", padx=10, pady=2)
+        self.lbl_loss = ttk.Label(stats_box, text="Losers: 0"); self.lbl_loss.pack(anchor="w", padx=10, pady=2)
+        self.lbl_hit = ttk.Label(stats_box, text="Hit Rate: 0.0%"); self.lbl_hit.pack(anchor="w", padx=10, pady=2)
+        right.add(stats_box, weight=1)
+
+        chart_box = ttk.Labelframe(right, text="Equity & Drawdown (7d)")
+        if Figure and FigureCanvasTkAgg:
+            self.figure = Figure(figsize=(4.1, 3.4), dpi=100)
+            self.ax_eq = self.figure.add_subplot(211)
+            self.ax_dd = self.figure.add_subplot(212)
+            self.ax_eq.set_ylabel("Equity"); self.ax_dd.set_ylabel("Drawdown %"); self.ax_dd.set_xlabel("Time")
+            self.canvas = FigureCanvasTkAgg(self.figure, master=chart_box)
+            self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        else:
+            self.figure = None; self.canvas = None
+            ttk.Label(chart_box, text="Matplotlib not available — charts disabled.").pack(padx=10, pady=10)
+        right.add(chart_box, weight=3)
+
+        center.add(right, weight=1)
+
+        # Start background loop and kick first refresh (non-blocking)
+        self._ensure_loop()
+        self.after(200, self.refresh_all_async)
+
+    # ------------- Non-blocking refresh -------------
+    def _ensure_loop(self):
+        if self._auto.get() and not self._thread:
+            self._stop = False
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+        if not self._auto.get():
+            self._stop = True
+            self._thread = None
+
+    def _loop(self):
+        while not self._stop:
+            time.sleep(5)
+            if self._auto.get():
+                try:
+                    self.after(0, self.refresh_all_async)
+                except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+
+    def _api(self) -> ApiClient:
+        return ApiClient(self._api_base_var.get())
+
+    def refresh_all(self):
+        self.refresh_all_async()
+
+    def refresh_all_async(self):
+        def worker():
+            api = self._api()
+            result = {}
+            # Update to fetch from the single /bundle endpoint
+            result["bundle"] = api.get("/bundle")
+            result["news_eu"] = api.get("/news/blackout?symbol=EURUSD")
+            result["news_gu"] = api.get("/news/blackout?symbol=GBPUSD")
+            result["news_xa"] = api.get("/news/blackout?symbol=XAUUSD")
+            self.after(0, lambda r=result: self._paint(r))
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ------------- Paint helpers -------------
+    def _paint(self, r):
+        # Update to get data from the bundle endpoint
+        bundle_data = r.get("bundle", (0, {}))[1]
+        summary_data = bundle_data.get("stats", {}) if isinstance(bundle_data, dict) else {}
+        positions_data = bundle_data.get("positions", []) if isinstance(bundle_data, dict) else []
+        orders_data = bundle_data.get("orders", []) if isinstance(bundle_data, dict) else []
+
+        eq  = _safe_float(summary_data.get("equity"))
+        bal = _safe_float(summary_data.get("balance"))
+        pnl = _safe_float(summary_data.get("open_pnl"))
+        pos = int(_safe_float(summary_data.get("open_positions"), 0))
+        try:
+            self.k_equity.winfo_children()[1].config(text=f"{eq:,.2f}")
+            self.k_balance.winfo_children()[1].config(text=f"{bal:,.2f}")
+            self.k_pnl.winfo_children()[1].config(text=f"{pnl:,.2f}")
+            self.k_pos.winfo_children()[1].config(text=str(pos))
+        except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+
+        guard_ok = True
+        try:
+            if bal and (pnl / max(bal, 1.0)) < -0.03:
+                guard_ok = False
+        except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+        self.p_guard.config(text=("Guardrails: OK" if guard_ok else "Guardrails: THROTTLED"),
+                            style=("StatusPillGreen.TLabel" if guard_ok else "StatusPillRed.TLabel"))
+
+        # Positions (now from bundle data)
+        rows_p = positions_data if isinstance(positions_data, list) else []
+        for x in self.tbl_positions.get_children(): self.tbl_positions.delete(x)
+        for p in rows_p:
+            self.tbl_positions.insert("", "end", values=(
+                p.get("ticket",""), p.get("symbol",""), p.get("side",""),
+                p.get("lots",""), p.get("entry",""), p.get("sl",""),
+                p.get("tp",""), p.get("pnl",""),
+            ))
+
+        # Orders + quick stats (now from bundle data)
+        rows_o = orders_data if isinstance(orders_data, list) else []
+        for x in self.tbl_orders.get_children(): self.tbl_orders.delete(x)
+        wins = losses = 0
+        for o in rows_o[:50]:
+            pnl_o = _safe_float(o.get("pnl", 0.0))
+            if pnl_o > 0: wins += 1
+            elif pnl_o < 0: losses += 1
+            self.tbl_orders.insert("", "end", values=(
+                o.get("id",""), o.get("symbol",""), o.get("type",""), o.get("side",""),
+                o.get("lots",""), o.get("price",""), o.get("time",""), pnl_o
+            ))
+        total = wins + losses if (wins + losses) > 0 else len(rows_o[:50])
+        hit = (wins / total * 100.0) if total else 0.0
+        self.lbl_trades.config(text=f"Trades: {total}")
+        self.lbl_win.config(text=f"Winners: {wins}")
+        self.lbl_loss.config(text=f"Losers: {losses}")
+        self.lbl_hit.config(text=f"Hit Rate: {hit:.1f}%")
+
+        # News pills
+        def blocked(x):
+            if isinstance(x, dict):
+                d = x.get("data", x)
+                if isinstance(d, dict):
+                    return bool(d.get("blackout", False))
+            return False
+        eu_b = blocked(r.get("news_eu", (0, {}))[1])
+        gu_b = blocked(r.get("news_gu", (0, {}))[1])
+        xa_b = blocked(r.get("news_xa", (0, {}))[1])
+        self.p_eu.config(text=f"EURUSD: {'BLOCK' if eu_b else 'CLEAR'}",
+                         style=("StatusPillRed.TLabel" if eu_b else "StatusPillGreen.TLabel"))
+        self.p_gu.config(text=f"GBPUSD: {'BLOCK' if gu_b else 'CLEAR'}",
+                         style=("StatusPillRed.TLabel" if gu_b else "StatusPillGreen.TLabel"))
+        self.p_xa.config(text=f"XAUUSD: {'BLOCK' if xa_b else 'CLEAR'}",
+                         style=("StatusPillRed.TLabel" if xa_b else "StatusPillGreen.TLabel"))
+
+        # Charts
+        self._charts()
+
+    # ------------- Charts -------------
+    def _read_equity_history(self):
+        f = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runtime", "equity_history.json"))
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return [float(x.get("equity", 0.0)) for x in data][-200:]
+        except Exception:
+            return None
+
+    def _charts(self):
+        if not (self.canvas and self.figure):
+            return
+        series = self._read_equity_history()
+        if not series:
+            # Fallback: flat line from current KPI
+            try:
+                base = _safe_float(self.k_equity.winfo_children()[1].cget("text").replace(",", ""), 100000.0)
+            except Exception:
+                base = 100000.0
+            series = [base for _ in range(50)]
+
+        # drawdown %
+        peak = float("-inf"); dd = []
+        for v in series:
+            peak = max(peak, v)
+            dd.append(0.0 if peak <= 0 else (v - peak) / peak * 100.0)
+
+        self.ax_eq.clear(); self.ax_dd.clear()
+        self.ax_eq.plot(series); self.ax_eq.set_ylabel("Equity")
+        self.ax_dd.plot(dd); self.ax_dd.set_ylabel("Drawdown %"); self.ax_dd.set_xlabel("Samples")
+        self.figure.tight_layout()
+        try:
+            self.canvas.draw_idle()
+        except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+    def refresh_alerts(self):
+        import requests
+        base = self._base() if hasattr(self,'_base') else 'http://127.0.0.1:18124'
+        try:
+            r = requests.post(base+'/alerts/refresh', json={'base_url': base}, timeout=3.5).json()
+        except Exception:
+            r = None
+        if not r: return
+        try:
+            a = r.get('alerts', [])
+            if not a:
+                self.alerts_lbl.config(text='None')
+                return
+            # show top 3 as badges
+            s = ' | '.join([f"[{x.get('severity','low').upper()}] {x.get('code')}" for x in a[:3]])
+            self.alerts_lbl.config(text=s)
+        except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+
+
+
+    # === BATCH90_SPARK: Sparkline (Live/Backtest) ===
+    self.spark_frame = tk.Frame(self.top, bg=self.bg)
+    self.spark_frame.place(relx=0.68, rely=0.02, relwidth=0.30, relheight=0.16)
+
+    self.spark_source = tk.StringVar(value="live")
+    tk.Radiobutton(self.spark_frame, text="Live", value="live", variable=self.spark_source, command=self.refresh_spark).pack(anchor="ne", padx=2, pady=2, side="right")
+    tk.Radiobutton(self.spark_frame, text="Backtest", value="backtest", variable=self.spark_source, command=self.refresh_spark).pack(anchor="ne", padx=2, pady=2, side="right")
+
+    self.spark_canvas = tk.Canvas(self.spark_frame, bg=self.bg2, highlightthickness=1, highlightbackground="#333")
+    self.spark_canvas.pack(fill="both", expand=True, padx=6, pady=6)
+
+    self.after(500, self.refresh_spark)
+
+def refresh_spark(self):
+    import requests, math
+    w = max(60, int(self.spark_canvas.winfo_width()))
+    h = max(40, int(self.spark_canvas.winfo_height()))
+    try:
+        src = self.spark_source.get()
+    except Exception:
+        src = "live"
+    try:
+        j = requests.get(f"http://127.0.0.1:18124/perf/spark", params={"source": src, "n": 120}, timeout=3).json()
+        series = j.get("series", [])
+    except Exception:
+        series = []
+    self.spark_canvas.delete("all")
+    if len(series) < 2:
+        self.spark_canvas.create_text(w//2, h//2, text="no data", fill="#888")
+        self.after(1500, self.refresh_spark)
+        return
+    mn = min(series); mx = max(series)
+    rng = (mx - mn) or 1.0
+    # margins
+    L,R,T,B = 6,6,6,6
+    def xmap(i): 
+        return L + (i/(len(series)-1)) * (w - L - R)
+    def ymap(v):
+        # higher = up
+        return T + (1.0 - (v - mn)/rng) * (h - T - B)
+    # draw polyline
+    last = None
+    for i,v in enumerate(series):
+        x = xmap(i); y = ymap(v)
+        if last is not None:
+            self.spark_canvas.create_line(last[0], last[1], x, y, width=2)
+        last = (x,y)
+    # baseline @ 100
+    by = ymap(100.0)
+    self.spark_canvas.create_line(L, by, w-R, by, fill="#555", dash=(2,2))
+    # small legend
+    self.spark_canvas.create_text(w-R-4, T+10, text=f"{series[-1]:.1f}", anchor="ne", fill="#ccc")
+    # schedule next refresh
+    self.after(2000, self.refresh_spark)
+    # === /BATCH90_SPARK ===

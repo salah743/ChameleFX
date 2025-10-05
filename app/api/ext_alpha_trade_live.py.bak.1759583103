@@ -1,0 +1,109 @@
+from __future__ import annotations
+from fastapi import APIRouter, Body
+from typing import Any, Dict, Optional
+import os, json, time
+
+router = APIRouter()
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+CFX  = os.path.join(ROOT, "chamelefx")
+CFG  = os.path.join(CFX, "config.json")
+RUN  = os.path.join(CFX, "runtime")
+ORDERS_FILE = os.path.join(RUN, "orders_recent.json")
+
+def _cfg() -> Dict[str, Any]:
+    try:
+        return json.load(open(CFG, "r", encoding="utf-8"))
+    except Exception:
+        return {}
+
+def _guard_allow(symbol: str|None=None, strategy: str|None=None) -> bool:
+    try:
+        from chamelefx.ops.guardrails import allow_trade as allow, approve
+        if approve and approve(symbol, strategy) is False:
+            return False
+        return bool(allow(symbol, strategy))
+    except Exception:
+        return True
+
+def _dd_scale() -> float:
+    try:
+        from chamelefx.ops.guardrails import dd_scale
+        return float(dd_scale())
+    except Exception:
+        return 1.0
+
+def _size_from_weight(weight: float, cfg: Dict[str, Any]) -> float:
+    # Convert weight ∈ [-1, +1] to positive lot size; sign handled as side
+    sizing = cfg.get("sizing") or {}
+    meth = (sizing.get("method") or "fixed").lower()
+    params = sizing.get("params") or {}
+    base = float(params.get("total_lots", 1.0))
+    # Keep it simple: weight magnitude scales total_lots
+    lots = max(0.01, abs(weight) * base)
+    return lots
+
+def _append_order_intent(rec: Dict[str, Any]):
+    os.makedirs(RUN, exist_ok=True)
+    rows = []
+    try:
+        rows = json.load(open(ORDERS_FILE, "r", encoding="utf-8"))
+        if not isinstance(rows, list):
+            rows = []
+    except Exception:
+        rows = []
+    rows.append(rec)
+    rows = rows[-200:]  # cap
+    json.dump(rows, open(ORDERS_FILE, "w", encoding="utf-8"), indent=2)
+
+@router.post("/alpha/trade_live")
+def alpha_trade_live(
+    symbol: str = Body(...),
+    strategy: Optional[str] = Body("alpha_ensemble"),
+    side: Optional[str] = Body(None),
+    weight: Optional[float] = Body(None),
+    lots: Optional[float] = Body(None),
+):
+    cfg = _cfg()
+
+    if not _guard_allow(symbol, strategy):
+        return {"ok": False, "error": "guardrails_blocked"}
+
+    # Resolve weight->side/lots if provided
+    if weight is not None and lots is None:
+        lots = _size_from_weight(weight, symbol, cfg)
+        side = "buy" if weight >= 0 else "sell"
+
+    # Fallbacks
+    side = side or "buy"
+    lots = float(lots or 0.10)
+    lots = max(0.01, lots * _dd_scale())
+
+    # TODO: plug into live router (MT5/bridge). For now, record the intent for UI & stubs.
+    rec = {
+        "ts": time.time(),
+        "symbol": symbol,
+        "strategy": strategy,
+        "side": side,
+        "lots": float(lots),
+        "weight": float(weight) if weight is not None else None,
+        "note": "intent recorded (router stub)"
+    }
+    _append_order_intent(rec)
+    return {"ok": True, "order": rec}
+
+
+        # BATCH62_MT5_CALL — route to MT5 when live=True
+        if bool(live):
+            try:
+                from chamelefx.execution.router_mt5 import route_order
+                _r = route_order({
+                    'symbol': symbol,
+                    'side': 'buy' if float(weight or 0)>=0 else 'sell',
+                    'lots': float(lots or 0.10),
+                    'kind': 'market'
+                })
+                result['mt5'] = _r
+            except Exception as _e:
+                result['mt5_error'] = repr(_e)
+

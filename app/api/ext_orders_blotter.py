@@ -1,0 +1,44 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from fastapi import APIRouter, Body
+# The correct implementation uses the blotter adapter for integration
+from chamelefx.integrations import blotter_adapter as BA
+from pathlib import Path as _Path
+import json as _json
+_ORDERS_OPEN_PATH = (_Path(__file__).resolve().parents[3] / "chamelefx" / "runtime" / "orders_open.json")
+def _orders_list():
+    try:
+        raw = _json.loads(_ORDERS_OPEN_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        raw = []
+    if isinstance(raw, dict): raw = [raw]
+    if not isinstance(raw, list): raw = []
+    raw = [r for r in raw if isinstance(r, dict)]
+    return raw
+def _orders_write(arr):
+    _ORDERS_OPEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ORDERS_OPEN_PATH.write_text(_json.dumps(arr, indent=2), encoding="utf-8")
+
+
+router = APIRouter()
+
+@router.get("/orders/open")
+def orders_open():
+    """Returns all currently open (working) orders from the system."""
+    return {"ok": True, "orders": BA.open_orders()}
+
+@router.get("/orders/recent")
+def orders_recent():
+    """Returns recent fills/executions."""
+    return {"ok": True, "fills": BA.recent_fills()}
+
+@router.post("/orders/cancel")
+def orders_cancel(order_id: str = Body(..., embed=True)):
+    """Requests cancellation of an open order by ID."""
+    return BA.cancel_order(order_id)
+
+@router.post("/orders/replace")
+def orders_replace(order_id: str = Body(..., embed=True),
+                   new_qty: float = Body(..., embed=True)):
+    """Requests replacement (amendment) of an open order with a new quantity."""
+    return BA.replace_order(order_id, new_qty)

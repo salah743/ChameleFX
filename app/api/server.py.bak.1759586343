@@ -1,0 +1,400 @@
+from app.api.ext_exec_router import router as exec_router
+from app.api.ext_exec_quality import router as exec_quality_router
+from app.api.ext_alpha_health import router as alpha_health_router
+from app.api.ext_bt_validate import router as bt_validate_router
+from app.api.ext_risk_plus import router as risk_plus_router
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# --- hard imports (fail loud if missing) ---
+from app.api.ext_risk_status import router as risk_router
+from app.api.ext_exec_quality import router as execq_router
+from app.api.ext_alerts import router as alerts_router
+from app.api.ext_actions import router as actions_router
+from app.api.ext_portfolio_optimize import router as portopt_router
+from app.api.ext_alpha_features import router as alpha_feat_router
+# alpha trade live is optional — guard it
+try:
+    from app.api.ext_alpha_trade_live import router as alpha_trade_router
+except Exception:
+    alpha_trade_router = None
+
+app = FastAPI(title="ChameleFX API", version="KO6")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+# mount routers explicitly
+app.include_router(risk_router)
+app.include_router(execq_router)
+app.include_router(alerts_router)
+app.include_router(actions_router)
+app.include_router(portopt_router)
+app.include_router(alpha_feat_router)
+if alpha_trade_router is not None:
+    app.include_router(alpha_trade_router)
+
+# route inspector so we can confirm mounts
+@app.get("/debug/routes")
+def debug_routes():
+    out = []
+    for r in app.routes:
+        try:
+            out.append({"path": r.path, "methods": sorted(list(r.methods or []))})
+        except Exception:
+            pass
+    return {"ok": True, "routes": out}
+
+# [KO9] include alpha seeder
+try:
+    from app.api.ext_alpha_seed import router as alpha_seed_router
+    app.include_router(alpha_seed_router)
+    print("[API] ext_alpha_seed not loaded:", repr(e))
+except Exception as e:
+    print("[API] ext_alpha_seed not loaded:", repr(e))
+
+# [BATCH51] include recent orders router
+try:
+    from app.api.ext_orders_recent import router as orders_recent_router
+    app.include_router(orders_recent_router)
+    print('[API] loaded: app.api.ext_orders_recent')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_orders_recent:', repr(e))
+
+# [BATCH51] include alpha last router
+try:
+    from app.api.ext_alpha_last import router as alpha_last_router
+    app.include_router(alpha_last_router)
+    print('[API] loaded: app.api.ext_alpha_last')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_alpha_last:', repr(e))
+
+# [BATCH54] include MT5 live router
+try:
+    from app.api.ext_mt5_router import router as mt5_router
+    app.include_router(mt5_router)
+    print('[API] loaded: app.api.ext_mt5_router')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_mt5_router:', repr(e))
+
+# [BATCH56] include sizing preview router
+try:
+    from app.api.ext_sizing_preview import router as sizing_router
+    app.include_router(sizing_router)
+    print('[API] loaded: app.api.ext_sizing_preview')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_sizing_preview:', repr(e))
+
+# [BATCH57] include regime router
+try:
+    from app.api.ext_regime_status import router as regime_router
+    app.include_router(regime_router)
+    print('[API] loaded: app.api.ext_regime_status')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_regime_status:', repr(e))
+
+# [BATCH60] include performance summary router
+try:
+    from app.api.ext_perf_stats import router as perf_router
+    app.include_router(perf_router)
+    print('[API] loaded: app.api.ext_perf_stats')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_perf_stats:', repr(e))
+
+# [BATCH55v2] include backtest router
+try:
+    from app.api.ext_backtest import router as bt_router
+    app.include_router(bt_router)
+    print('[API] loaded: app.api.ext_backtest')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_backtest:', repr(e))
+
+# [BATCH61] include portfolio returns router
+try:
+    from app.api.ext_portfolio_returns import router as port_ret_router
+    app.include_router(port_ret_router)
+    print('[API] loaded: app.api.ext_portfolio_returns')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_portfolio_returns:', repr(e))
+
+# [BATCH62] include MT5 live router
+try:
+    from app.api.ext_mt5_live import router as mt5_router
+    app.include_router(mt5_router)
+    print('[API] loaded: app.api.ext_mt5_live')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_mt5_live:', repr(e))
+
+# [KO8] include alpha trade routers
+try:
+    from app.api.ext_alpha_trade import router as alpha_trade_router_new
+    app.include_router(alpha_trade_router_new)
+    print('[API] loaded: app.api.ext_alpha_trade')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_alpha_trade:', repr(e))
+
+# [BATCH66] include backtest v3 router
+try:
+    from app.api.ext_backtest_v3 import router as bt3_router
+    app.include_router(bt3_router)
+    print('[API] loaded: app.api.ext_backtest_v3')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_backtest_v3:', repr(e))
+
+# [BATCH67] include perf spark router
+try:
+    from app.api.ext_perf_spark import router as perf_spark_router
+    app.include_router(perf_spark_router)
+    print('[API] loaded: app.api.ext_perf_spark')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_perf_spark:', repr(e))
+
+# [BATCH69] include portfolio target/actual router
+try:
+    from app.api.ext_portfolio_view import router as port_view_router
+    app.include_router(port_view_router)
+    print('[API] loaded: app.api.ext_portfolio_view')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_portfolio_view:', repr(e))
+
+# [BATCH70] include portfolio auto-rebalance router
+try:
+    from app.api.ext_portfolio_rebalance import router as port_reb_router
+    app.include_router(port_reb_router)
+    print('[API] loaded: app.api.ext_portfolio_rebalance')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_portfolio_rebalance:', repr(e))
+
+# [BATCH72] include orders blotter router
+try:
+    from app.api.ext_orders_blotter import router as ord_blot_router
+    app.include_router(ord_blot_router)
+    print('[API] loaded: app.api.ext_orders_blotter')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_orders_blotter:', repr(e))
+
+# [BATCH73] include alpha diagnostics router
+try:
+    from app.api.ext_alpha_diag import router as alpha_diag_router
+    app.include_router(alpha_diag_router)
+    print('[API] loaded: app.api.ext_alpha_diag')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_alpha_diag:', repr(e))
+
+# [BATCH74] include alpha diag pro router
+try:
+    from app.api.ext_alpha_diag_pro import router as alpha_diag_pro_router
+    app.include_router(alpha_diag_pro_router)
+    print('[API] loaded: app.api.ext_alpha_diag_pro')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_alpha_diag_pro:', repr(e))
+
+# [BATCH75] include customer summary router
+try:
+    from app.api.ext_customer_summary import router as cust_sum_router
+    app.include_router(cust_sum_router)
+    print('[API] loaded: app.api.ext_customer_summary')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_customer_summary:', repr(e))
+
+# [BATCH77] include risk sizer & regime routers
+try:
+    from app.api.ext_risk_sizer import router as risk_sizer_router
+    app.include_router(risk_sizer_router)
+    print('[API] loaded: app.api.ext_risk_sizer')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_risk_sizer:', repr(e))
+
+# [BATCH78] include alpha ensemble router
+try:
+    from app.api.ext_alpha_ensemble import router as alpha_ensemble_router
+    app.include_router(alpha_ensemble_router)
+    print('[API] loaded: app.api.ext_alpha_ensemble')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_alpha_ensemble:', repr(e))
+
+# [BATCH79] include execution TCA & guard routers
+try:
+    from app.api.ext_exec_tca import router as exec_tca_router
+    app.include_router(exec_tca_router)
+    print('[API] loaded: app.api.ext_exec_tca')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_tca:', repr(e))
+
+# [BATCH80] include regime router & decay
+try:
+    from app.api.ext_regime_router import router as regime_router
+    app.include_router(regime_router)
+    print('[API] loaded: app.api.ext_regime_router')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_regime_router:', repr(e))
+
+# [BATCH79B] include child-order slicer router
+try:
+    from app.api.ext_exec_slicer import router as exec_slicer_router
+    app.include_router(exec_slicer_router)
+    print('[API] loaded: app.api.ext_exec_slicer')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_slicer:', repr(e))
+
+# [BATCH82] include risk guardrails router
+try:
+    from app.api.ext_guardrails import router as risk_guard_router
+    app.include_router(risk_guard_router)
+    print('[API] loaded: app.api.ext_guardrails')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_guardrails:', repr(e))
+
+# [BATCH83] include watchdog router
+try:
+    from app.api.ext_watchdogs import router as watchdog_router
+    app.include_router(watchdog_router)
+    print('[API] loaded: app.api.ext_watchdogs')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_watchdogs:', repr(e))
+
+# [BATCH81] include promotion router
+try:
+    from app.api.ext_promotion import router as promo_router
+    app.include_router(promo_router)
+    print('[API] loaded: app.api.ext_promotion')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_promotion:', repr(e))
+
+# [BATCH79C] include exec limits router
+try:
+    from app.api.ext_exec_limits import router as exec_limits_router
+    app.include_router(exec_limits_router)
+    print('[API] loaded: app.api.ext_exec_limits')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_limits:', repr(e))
+
+# [BATCH84] include exec latency router
+try:
+    from app.api.ext_exec_latency import router as exec_latency_router
+    app.include_router(exec_latency_router)
+    print('[API] loaded: app.api.ext_exec_latency')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_latency:', repr(e))
+
+# [BATCH85] include ioc probe router
+try:
+    from app.api.ext_ioc_probe import router as ioc_router
+    app.include_router(ioc_router)
+    print('[API] loaded: app.api.ext_ioc_probe')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_ioc_probe:', repr(e))
+
+# [BATCH87] include exec failover router
+try:
+    from app.api.ext_exec_failover import router as exec_failover_router
+    app.include_router(exec_failover_router)
+    print('[API] loaded: app.api.ext_exec_failover')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_failover:', repr(e))
+
+# [BATCH88] include exec pov router
+try:
+    from app.api.ext_exec_pov import router as exec_pov_router
+    app.include_router(exec_pov_router)
+    print('[API] loaded: app.api.ext_exec_pov')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_pov:', repr(e))
+
+# [BATCH94] include execution telemetry router
+try:
+    from app.api.ext_exec_telemetry import router as exec_tel_router
+    app.include_router(exec_tel_router)
+    print('[API] loaded: app.api.ext_exec_telemetry')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_telemetry:', repr(e))
+
+# [BATCH96] include execution benchmarks router
+try:
+    from app.api.ext_exec_bench import router as exec_bench_router
+    app.include_router(exec_bench_router)
+    print('[API] loaded: app.api.ext_exec_bench')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_bench:', repr(e))
+
+# [BATCH97] include router auto-tune
+try:
+    from app.api.ext_router_tune import router as router_tune_router
+    app.include_router(router_tune_router)
+    print('[API] loaded: app.api.ext_router_tune')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_router_tune:', repr(e))
+
+# [BATCH98] include exec venue router
+try:
+    from app.api.ext_exec_venue import router as exec_venue_router
+    app.include_router(exec_venue_router)
+    print('[API] loaded: app.api.ext_exec_venue')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_exec_venue:', repr(e))
+
+# [BATCH99A] include weekend jobs router
+try:
+    from app.api.ext_jobs import router as jobs_router
+    app.include_router(jobs_router)
+    print('[API] loaded: app.api.ext_jobs')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_jobs:', repr(e))
+
+# [BATCH100a] include regime-biased trade router
+try:
+    from app.api.ext_alpha_trade_bias import router as trade_bias_router
+    app.include_router(trade_bias_router)
+    print('[API] loaded: app.api.ext_alpha_trade_bias')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_alpha_trade_bias:', repr(e))
+
+# [BATCH100b] include backtest regime-bias router
+try:
+    from app.api.ext_backtest_bias import router as bt_bias_router
+    app.include_router(bt_bias_router)
+    print('[API] loaded: app.api.ext_backtest_bias')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_backtest_bias:', repr(e))
+
+# [BATCH101] include router overrides API
+try:
+    from app.api.ext_router_overrides import router as router_overrides
+    app.include_router(router_overrides)
+    print('[API] loaded: app.api.ext_router_overrides')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_router_overrides:', repr(e))
+
+# [BATCH103] include risk guardrails API
+try:
+    from app.api.ext_risk_guardrails import router as risk_router
+    app.include_router(risk_router)
+    print('[API] loaded: app.api.ext_risk_guardrails')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_risk_guardrails:', repr(e))
+
+# [BATCH104] include perf v2
+try:
+    from app.api.ext_perf_v2 import router as perf_router
+    app.include_router(perf_router)
+    print('[API] loaded: app.api.ext_perf_v2')
+except Exception as e:
+    print('[API] NOT loaded app.api.ext_perf_v2:', repr(e))
+
+app.include_router(exec_router)
+
+app.include_router(exec_quality_router)
+
+app.include_router(alpha_health_router)
+
+app.include_router(risk_plus_router)
+
+app.include_router(bt_validate_router)

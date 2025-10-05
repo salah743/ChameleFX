@@ -1,0 +1,13 @@
+from __future__ import annotations
+from typing import Any, Dict
+
+def place(symbol: str, side: str, weight: float = 0.0, order_type: str = "market") -> Dict[str, Any]:
+    """Stub order bridge: in real system this routes to MT5/live execution."""
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "side": side,
+        "weight": weight,
+        "order_type": order_type,
+        "status": "ACCEPTED",
+    }

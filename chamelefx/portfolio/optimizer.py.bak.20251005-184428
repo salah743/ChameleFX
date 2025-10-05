@@ -1,0 +1,208 @@
+from __future__ import annotations
+import csv, os, json
+from typing import List, Dict, Any
+
+# Paths
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DATA = os.path.join(os.path.dirname(ROOT), "data", "history")
+RUN  = os.path.join(ROOT, "runtime")
+DB_LOCAL = os.path.join(RUN, "databank")  # runtime/databank/<SYMBOL>.json (optional)
+
+API = "http://127.0.0.1:18124"
+API_CANDIDATES = ("/db/prices", "/replay/prices", "/databank/prices")  # any that exists
+
+def _read_prices_csv(path: str) -> List[float]:
+    out=[]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            r=csv.DictReader(f)
+            for row in r:
+                v=row.get("close") or row.get("Close") or row.get("price")
+                try: out.append(float(v))
+                except: pass
+    except Exception:
+        return []
+    return out
+
+def _read_local_databank_json(symbol: str) -> List[float]:
+    """runtime/databank/<SYMBOL>.json -> either [floats] or {'prices':[...]}"""
+    fp = os.path.join(DB_LOCAL, f"{symbol}.json")
+    if not os.path.exists(fp):
+        return []
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            j = json.load(f)
+        if isinstance(j, list):
+            return [float(x) for x in j if isinstance(x, (int,float,str))]
+        if isinstance(j, dict):
+            arr = j.get("prices") or j.get("close") or j.get("equity")
+            if isinstance(arr, list):
+                out=[]
+                for x in arr:
+                    try: out.append(float(x))
+                    except: pass
+                return out
+    except Exception:
+        return []
+    return []
+
+def _fetch_databank_api(symbol: str, limit: int) -> List[float]:
+    """Try several known routes on the local API. Returns [] if all fail or requests missing."""
+    try:
+        import requests
+    except Exception:
+        return []
+    for route in API_CANDIDATES:
+        url = f"{API}{route}"
+        try:
+            # prefer querystring style; also try JSON body if server expects it
+            r = requests.get(url, params={"symbol": symbol, "limit": int(limit)}, timeout=3)
+            if r.ok:
+                j = r.json()
+                # accept formats:
+                # 1) {'ok':true,'prices':[...]}  2) {'prices':[...]}  3) [ ... ]
+                if isinstance(j, dict):
+                    arr = j.get("prices") or j.get("close") or j.get("equity")
+                    if isinstance(arr, list):
+                        out=[]
+                        for x in arr:
+                            try: out.append(float(x))
+                            except: pass
+                        if out: return out
+                elif isinstance(j, list):
+                    out=[]
+                    for x in j:
+                        try: out.append(float(x))
+                        except: pass
+                    if out: return out
+            # Some builds might require POST
+            r = requests.post(url, json={"symbol": symbol, "limit": int(limit)}, timeout=3)
+            if r.ok:
+                j = r.json()
+                if isinstance(j, dict):
+                    arr = j.get("prices") or j.get("close") or j.get("equity")
+                    if isinstance(arr, list):
+                        out=[]
+                        for x in arr:
+                            try: out.append(float(x))
+                            except: pass
+                        if out: return out
+                elif isinstance(j, list):
+                    out=[]
+                    for x in j:
+                        try: out.append(float(x))
+                        except: pass
+                    if out: return out
+        except Exception:
+            continue
+    return []
+
+def _clip_lookback(px: List[float], lookback: int) -> List[float]:
+    if lookback>0 and len(px)>lookback:
+        return px[-lookback:]
+    return px
+
+def load_prices(symbols: List[str], data_dir: str|None=None, lookback: int=252) -> Dict[str, List[float]]:
+    """
+    Priority:
+      1) CSV at data_dir or default DATA
+      2) runtime/databank/<SYMBOL>.json
+      3) API fallback (one of /db/prices | /replay/prices | /databank/prices)
+    Returns dict: {symbol: [prices]}
+    """
+    base = data_dir or DATA
+    res={}
+    for s in symbols:
+        # 1) CSV
+        px = _read_prices_csv(os.path.join(base, f"{s}.csv"))
+        if not px:
+            # 2) local databank JSON
+            px = _read_local_databank_json(s)
+        if not px:
+            # 3) HTTP API fallback
+            px = _fetch_databank_api(s, limit=lookback)
+        res[s] = _clip_lookback(px, lookback)
+    return res
+
+def returns_from_prices(px: List[float]) -> List[float]:
+    rets=[]
+    for i in range(1, len(px)):
+        p0, p1 = px[i-1], px[i]
+        rets.append((p1-p0)/p0 if p0 else 0.0)
+    return rets
+
+def mean_vector(returns: Dict[str, List[float]]) -> Dict[str, float]:
+    out={}
+    for s, rr in returns.items():
+        out[s]= (sum(rr)/len(rr)) if rr else 0.0
+    return out
+
+def cov_matrix(returns: Dict[str, List[float]], symbols: List[str]) -> List[List[float]]:
+    mus = {s:(sum(returns[s])/len(returns[s]) if returns[s] else 0.0) for s in symbols}
+    n=len(symbols)
+    cov=[[0.0]*n for _ in range(n)]
+    for i,si in enumerate(symbols):
+        ri=returns.get(si, [])
+        for j,sj in enumerate(symbols):
+            if i>j: cov[i][j]=cov[j][i]; continue
+            rj=returns.get(sj, [])
+            m=min(len(ri),len(rj))
+            if m<2: c=0.0
+            else: c=sum((ri[k]-mus[si])*(rj[k]-mus[sj]) for k in range(m))/(m-1)
+            cov[i][j]=c; cov[j][i]=c
+    return cov
+
+def _matvec(mat, vec): return [sum(mat[i][k]*vec[k] for k in range(len(vec))) for i in range(len(mat))]
+def _pinv_diag(mat, eps=1e-6):
+    n=len(mat)
+    a=[[mat[i][j] + (eps if i==j else 0.0) for j in range(n)] for i in range(n)]
+    inv=[[1.0 if i==j else 0.0 for i in range(n)] for _ in range(n)]
+    for i in range(n):
+        pivot=a[i][i] or eps
+        s=1.0/pivot
+        for j in range(n): a[i][j]*=s; inv[i][j]*=s
+        for r in range(n):
+            if r==i: continue
+            f=a[r][i]
+            for c in range(n): a[r][c]-=f*a[i][c]; inv[r][c]-=f*inv[i][c]
+    return inv
+
+def _normalize_long_only(w, max_w=None):
+    w=[max(0.0,x) for x in w]
+    s=sum(w) or 1.0
+    w=[x/s for x in w]
+    if max_w and max_w>0:
+        w=[min(x,max_w) for x in w]
+        s=sum(w) or 1.0; w=[x/s for x in w]
+    return [round(x,6) for x in w]
+
+def mean_variance(symbols, mu, cov, long_only=True, max_weight=0.35):
+    inv=_pinv_diag(cov)
+    raw=_matvec(inv, [mu[s] for s in symbols])
+    if long_only: w=_normalize_long_only(raw, max_w=max_weight)
+    else:
+        s=sum(abs(x) for x in raw) or 1.0
+        w=[x/s for x in raw]
+    return {s:w[i] for i,s in enumerate(symbols)}
+
+def risk_parity(symbols, cov, long_only=True, max_weight=0.35, iters=300, lr=0.05):
+    n=len(symbols); w=[1.0/n]*n
+    for _ in range(iters):
+        c=_matvec(cov,w); port_var=sum(w[i]*c[i] for i in range(n)) or 1.0
+        rc=[w[i]*c[i]/port_var for i in range(n)]
+        tgt=1.0/n
+        grad=[(rc[i]-tgt) for i in range(n)]
+        w=[max(0.0, w[i]-lr*grad[i]) for i in range(n)]
+        s=sum(w) or 1.0; w=[x/s for x in w]
+    if long_only: w=_normalize_long_only(w, max_w=max_weight)
+    return {s:w[i] for i,s in enumerate(symbols)}
+
+def optimize(symbols, data_dir=None, lookback=252, objective="mean_variance", long_only=True, max_weight=0.35):
+    prices=load_prices(symbols, data_dir=data_dir, lookback=lookback)
+    rets={s: returns_from_prices(px) for s,px in prices.items()}
+    mu=mean_vector(rets); cov=cov_matrix(rets, symbols)
+    if objective=="risk_parity":
+        w=risk_parity(symbols, cov, long_only=long_only, max_weight=max_weight)
+    else:
+        w=mean_variance(symbols, mu, cov, long_only=long_only, max_weight=max_weight)
+    return {"ok": True, "objective": objective, "lookback": lookback, "symbols": symbols, "weights": w}

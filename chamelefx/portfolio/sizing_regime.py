@@ -1,0 +1,88 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+from typing import Dict, Any
+from pathlib import Path
+import json
+
+ROOT = Path(__file__).resolve().parents[1]
+RUN  = ROOT / "runtime"
+RUN.mkdir(parents=True, exist_ok=True)
+CFG  = RUN / "regime_sizing.json"
+MON  = RUN / "alpha_monitor.json"   # written by Bundle M
+
+DEFAULT = {
+  "multipliers": {
+    "trend":  {"low":1.1, "normal":1.0, "high":0.8},
+    "range":  {"low":0.9, "normal":1.0, "high":1.0},
+    "unknown":{"low":1.0, "normal":1.0, "high":1.0}
+  },
+  "fallback": 1.0
+}
+
+def _read_json(p: Path, default):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+def get_config() -> dict:
+    cfg = _read_json(CFG, DEFAULT)
+    # normalize keys/caps
+    for k in ("trend","range","unknown"):
+        cfg.setdefault("multipliers", {}).setdefault(k, {"low":1.0,"normal":1.0,"high":1.0})
+        for v in ("low","normal","high"):
+            try:
+                cfg["multipliers"][k][v] = float(cfg["multipliers"][k][v])
+            except Exception:
+                cfg["multipliers"][k][v] = 1.0
+    try:
+        cfg["fallback"] = float(cfg.get("fallback", 1.0))
+    except Exception:
+        cfg["fallback"] = 1.0
+    return cfg
+
+def set_config(new_cfg: dict) -> dict:
+    cfg = get_config()
+    # shallow merge
+    if isinstance(new_cfg, dict):
+        if "multipliers" in new_cfg and isinstance(new_cfg["multipliers"], dict):
+            for reg, volmap in new_cfg["multipliers"].items():
+                if reg not in cfg["multipliers"]: 
+                    cfg["multipliers"][reg] = {"low":1.0,"normal":1.0,"high":1.0}
+                if isinstance(volmap, dict):
+                    for v, val in volmap.items():
+                        try:
+                            cfg["multipliers"][reg][v] = float(val)
+                        except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+        if "fallback" in new_cfg:
+            try:
+                cfg["fallback"] = float(new_cfg["fallback"])
+            except Exception:
+    get_logger(__name__).exception('Unhandled exception')
+    CFG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return {"ok": True, "config": cfg}
+
+def _latest_regime(symbol: str) -> tuple[str,str]:
+    d = _read_json(MON, {"symbols":{}})
+    sym = str(symbol).upper()
+    rec = d.get("symbols", {}).get(sym, {})
+    last = rec.get("last", {})
+    regime = last.get("regime", {}) if isinstance(last, dict) else {}
+    trend = str(regime.get("trend","unknown")).lower()
+    vol   = str(regime.get("vol","normal")).lower()
+    if trend not in ("trend","range","unknown"): trend = "unknown"
+    if vol not in ("low","normal","high"): vol = "normal"
+    return trend, vol
+
+def regime_multiplier(symbol: str) -> float:
+    cfg = get_config()
+    trend, vol = _latest_regime(symbol)
+    try:
+        return float(cfg["multipliers"][trend][vol])
+    except Exception:
+        return float(cfg.get("fallback", 1.0))
+
+def apply_regime(symbol: str, base_weight: float) -> float:
+    mult = regime_multiplier(symbol)
+    return float(base_weight) * float(mult)

@@ -1,0 +1,65 @@
+from __future__ import annotations
+from chamelefx.log import get_logger
+import json, time, math
+from pathlib import Path
+from typing import Dict, Any, List
+
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "data" / "telemetry"
+FILE = DATA / "alpha_drift.json"
+
+def _load() -> Dict[str, Any]:
+    try:
+        return json.loads(FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"models": {}, "ts": time.time()}
+
+def _save(x: Dict[str, Any]) -> None:
+    DATA.mkdir(parents=True, exist_ok=True)
+    tmp = FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(x, indent=2), encoding="utf-8")
+    tmp.replace(FILE)
+
+def _hist(xs: List[float], bins: int = 20, lo: float = None, hi: float = None):
+    if not xs:
+        return [0.0]*bins, 0.0, 0.0
+    lo = float(min(xs)) if lo is None else float(lo)
+    hi = float(max(xs)) if hi is None else float(hi)
+    if hi <= lo: hi = lo + 1e-9
+    w = (hi - lo) / bins
+    h = [0]*bins
+    for x in xs:
+        idx = int((x - lo) / w)
+        if idx >= bins: idx = bins-1
+        if idx < 0: idx = 0
+        h[idx] += 1
+    n = float(len(xs))
+    return [c/n for c in h], lo, hi
+
+def _kl(p: List[float], q: List[float]) -> float:
+    eps = 1e-9
+    s = 0.0
+    for pi, qi in zip(p, q):
+        s += pi * (math.log((pi+eps)/(qi+eps)))
+    return float(s)
+
+def record_distributions(model: str, live_scores: List[float], backtest_scores: List[float], bins: int = 20) -> Dict[str, Any]:
+    d = _load()
+    m = d["models"].setdefault(model, {})
+    p, lo1, hi1 = _hist(live_scores, bins)
+    q, lo2, hi2 = _hist(backtest_scores, bins, lo1, hi1)
+    m["kl"] = _kl(p, q)
+    m["samples_live"] = len(live_scores)
+    m["samples_backtest"] = len(backtest_scores)
+    m["ts"] = time.time()
+    d["ts"] = time.time()
+    _save(d)
+    return {"ok": True, "model": model, "kl": m["kl"]}
+
+def summary(model: str) -> Dict[str, Any]:
+    d = _load()
+    return {"ok": True, "model": model, **d.get("models", {}).get(model, {})}
+
+def summary_all() -> Dict[str, Any]:
+    d = _load()
+    return {"ok": True, "models": d.get("models", {}), "ts": d.get("ts",0)}

@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "runs": [
+    {
+      "symbol": "EURUSD",
+      "train_len": 600,
+      "test_len": 200,
+      "bias": 1.0,
+      "equity_last": 1.0375146140864417,
+      "sharpe_approx": 0.0998625442107058
+    },
+    {
+      "symbol": "GBPUSD",
+      "train_len": 600,
+      "test_len": 200,
+      "bias": 1.0,
+      "equity_last": 1.0331767877467468,
+      "sharpe_approx": 0.08158573181741667
+    }
+  ],
+  "ts": 1759586611.3260527
+}
