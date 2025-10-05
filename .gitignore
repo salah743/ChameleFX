@@ -1,29 +1,16 @@
-﻿# Python
-__pycache__/
+﻿__pycache__/
 *.pyc
 *.pyo
-*.pyd
 *.egg-info/
-
-# Local env / build
 .env
 .venv/
 venv/
 dist/
 build/
-
-# Project runtime
 chamelefx/runtime/
 chamelefx/runtime/**
-
-# Logs
 *.log
-chamelefx/runtime/logs/
-
-# Portable python bundle
 py-portable/
-
-# Editor/OS
 .vscode/
 .idea/
 .DS_Store
