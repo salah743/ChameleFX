@@ -1,0 +1,25 @@
+﻿name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  lint-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: python -m pip install -U pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (flake8)
+        run: flake8 app chamelefx
+      - name: Import smoke (no server)
+        run: python - << "PY"
+import py_compile, sys, pathlib
+root = pathlib.Path('.')
+for p in list(root.rglob('*.py')):
+    if any(seg in {'.venv','py-portable','.git','dist','build'} for seg in p.parts): 
+        continue
+    py_compile.compile(str(p), doraise=True)
+print("OK: compiled")
+PY

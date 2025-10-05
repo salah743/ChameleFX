@@ -1,6 +1,27 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-pydantic>=2.7.0
-python-dotenv>=1.0.1
-MetaTrader5>=5.0.45
-requests>=2.32.3
+﻿# ChameleFX
+
+A compact FX trading stack with:
+- FastAPI service (`app/api/server.py`) with autoloaded routers
+- Alpha features + portfolio optimizer endpoints
+- MT5 resilience (heartbeat/reconnect/outbox with file locks)
+- Atomic JSON runtime + simple logging to `chamelefx/runtime/logs/app.log`
+
+## Quick start (Windows)
+```powershell
+cd D:\ChameleFX
+.\py-portable\python\python.exe -m uvicorn app.api.server:app --host 127.0.0.1 --port 18124 --log-level debug
+# health
+Invoke-RestMethod http://127.0.0.1:18124/health
+
+setx CHAM_MT5_LOGIN "248628215"
+setx CHAM_MT5_PASSWORD "Nas-12345"
+setx CHAM_MT5_SERVER "Exness-MT5Trial"
+
+
+# 2) Minimal deps + simple CI (syntax + lint)
+```powershell
+# Minimal runtime deps
+@'
+fastapi
+uvicorn[standard]
+pydantic>=2
