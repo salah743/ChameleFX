@@ -1,291 +1,162 @@
-from __future__ import annotations
-from chamelefx.ui.ops_tab import OpsTab
-from chamelefx.ui.blotter_tab import BlotterTab
+$mp = ".\chamelefx\manager.py"
+Copy-Item $mp "$mp.bak" -Force 2>$null
 
-# ---------- path guard ----------
-import os, sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-# ---------- stdlib / deps ----------
-import time, atexit
+@'
+import importlib, pkgutil, time, json, urllib.request, urllib.error
+from pathlib import Path
+from typing import Callable, Dict, Any, List, Optional
 import tkinter as tk
 from tkinter import ttk
-from chamelefx.ui.backtest_tab import BacktestTab
-from chamelefx.ui.portfolio_tab import PortfolioTab
-from chamelefx.ui.logs_tab import LogsTab
-from chamelefx.ui.customer_tab import CustomerTab
-# ---------- single-instance lock (PID+TTL) ----------
-_LOCK_DIR = os.path.join(os.path.dirname(__file__), "runtime")
-os.makedirs(_LOCK_DIR, exist_ok=True)
-_LOCK_FILE = os.path.join(_LOCK_DIR, "manager.lock")
-def _pid_alive(pid: int) -> bool:
-    try:
-        if os.name == "nt":
-            import ctypes
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
-        else:
-            os.kill(pid, 0)
-            return True
-    except Exception:
-        return False
-def _take_lock() -> bool:
-    now = int(time.time())
-    pid = os.getpid()
-    if os.path.exists(_LOCK_FILE):
-        try:
-            txt = open(_LOCK_FILE, "r", encoding="utf-8").read().strip()
-            old_pid, ts = (txt.split(",") + ["0"])[:2]
-            old_pid = int(old_pid) if old_pid.isdigit() else -1
-            ts = int(ts) if ts.isdigit() else 0
-        except Exception:
-            old_pid, ts = -1, 0
-        age = now - ts if ts else 999999
-        if age > 120 or (old_pid > 0 and not _pid_alive(old_pid)):
-            try: os.remove(_LOCK_FILE)
-            except Exception: pass
-    try:
-        fd = os.open(_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, f"{pid},{now}".encode("ascii"))
-        os.close(fd)
-        atexit.register(lambda: os.path.exists(_LOCK_FILE) and os.remove(_LOCK_FILE))
-        return True
-    except FileExistsError:
-        return False
-if not _take_lock():
-    print("[CFX] Manager already running - exiting.")
-    raise SystemExit(0)
-# ---------- imports for UI components ----------
-try:
-    from chamelefx.ui.dashboard import CustomerDashboard
-except Exception as _e:
-    CustomerDashboard = None
-    _DASHBOARD_IMPORT_ERR = _e
 
 try:
-    from chamelefx.ui.dumpboard import DumpBoard
-except Exception as _e:
-    DumpBoard = None
-    _DUMP_IMPORT_ERR = _e
+    from chamelefx.log import get_logger
+except Exception:
+    import logging
+    def get_logger(name): return logging.getLogger(name)
 
-try:
-    from chamelefx.ui.alpha_tab import AlphaTab
-except Exception as _e:
-    AlphaTab = None
-    _ALPHA_IMPORT_ERR = _e
-
-try:
-    from chamelefx.ui.exec_tab import ExecTab
-except Exception as _e:
-    ExecTab = None
-    _EXEC_IMPORT_ERR = _e
-
-try:
-    from chamelefx.ui.analytics_tab import AnalyticsTab
-except Exception as _e:
-    AnalyticsTab = None
-    _ANALYTICS_IMPORT_ERR = _e
-
-class ManagerApp(tk.Tk):
-    def open_customer_panels(self):
-        try:
-            from chamelefx.ui.customer_panels import open_window
-            open_window(self)
-        except Exception as e:
-            print('[UI] customer_panels error:', repr(e))
-
+class EventBus:
     def __init__(self):
-        super().__init__()
-        self.title("ChameleFX Manager v1")
-        self.geometry("1024x680+120+80")
+        self._subs: Dict[str, List[Callable[[str, dict], None]]] = {}
+    def subscribe(self, topic: str, fn: Callable[[str, dict], None]):
+        self._subs.setdefault(topic, []).append(fn)
+    def publish(self, topic: str, payload: dict):
+        for fn in list(self._subs.get(topic, [])):
+            try: fn(topic, payload)
+            except Exception: pass
+
+class ApiClient:
+    def __init__(self, base: str, timeout: float = 5.0):
+        self.base = base.rstrip("/"); self.timeout = timeout
+    def _req(self, method: str, path: str, data: Optional[dict] = None) -> dict:
+        url = self.base + (path if path.startswith("/") else "/" + path)
+        headers = {"Content-Type": "application/json"}
+        body = json.dumps(data).encode("utf-8") if data is not None else None
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            self.iconify(); self.deiconify()  # fixes focus glitch on some Win builds
-        except Exception:
-            pass
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try: return json.loads(e.read().decode("utf-8"))
+            except Exception: return {"ok": False, "status": e.code, "error": str(e)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    def get(self, path: str) -> dict:  return self._req("GET", path)
+    def post(self, path: str, data: dict) -> dict: return self._req("POST", path, data)
 
-        # header strip - same three tiles you already had
-        strip = tk.Frame(self, pady=6)
-        strip.pack(fill="x")
-        self.status_over = tk.Label(strip, text="Overrides: BLOCK", bg="#f7c6c6", relief="groove", width=18)
-        self.status_ens  = tk.Label(strip, text="Ensemble: ON",   bg="#c7f7c7", relief="groove", width=18)
-        self.status_spd  = tk.Label(strip, text="Spread OK: OK",  bg="#c7f7f7", relief="groove", width=18)
-        for i,w in enumerate((self.status_over, self.status_ens, self.status_spd)):
-            w.grid(row=0, column=i, padx=10)
+class UIHelpers:
+    def __init__(self, root: tk.Tk): self.root = root
+    def make_led(self, parent, size=12, color="grey"):
+        c = tk.Canvas(parent, width=size, height=size, highlightthickness=0, bg=parent.cget("background"))
+        o = c.create_oval(1,1,size-1,size-1, fill=color, outline=""); c._oval = o
+        def set_color(col): c.itemconfigure(o, fill=col)
+        c.set_color = set_color; return c
+    def make_table(self, parent, columns: List[str]):
+        tree = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+        for c in columns: tree.heading(c, text=c); tree.column(c, width=100, anchor="center")
+        tree.pack(fill="both", expand=True)
+        def update_rows(rows):
+            tree.delete(*tree.get_children())
+            if rows and isinstance(rows[0], dict):
+                for r in rows: tree.insert("", "end", values=[r.get(c,"") for c in columns])
+            else:
+                for r in rows: tree.insert("", "end", values=r)
+        tree.update_rows = update_rows; return tree
 
-        # ----- main body: notebook with Customer + Dump + Alpha -----
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True)
-        self.api_entry = tk.StringVar()  # Initialize api_entry here
+class Manager:
+    def __init__(self):
+        self.root = tk.Tk(); self.root.title("ChameleFX — Manager"); self.root.geometry("980x640")
+        self.logger = get_logger("manager")
+        self.root_dir = Path(__file__).resolve().parents[1]
+        cfg = self._load_config()
+        base = cfg.get("api",{}).get("base") or "http://127.0.0.1:18124"
+        self.api = ApiClient(base)
+        self.event_bus = EventBus()
+        self.ui = UIHelpers(self.root)
+        self.frames = self._build_frames()
+        self.components: List[Any] = []
+        self._load_components()
+        self.refresh_ms = 800
+        self.root.after(self.refresh_ms, self._refresh_loop)
 
-        # Show an empty placeholder quickly to avoid “not responding”
-        placeholder = tk.Frame(self.notebook)
-        ttk.Label(placeholder, text="Loading…").pack(padx=20, pady=20)
-        self.notebook.add(placeholder, text="Loading")
+    def _load_config(self)->dict:
+        p = self.root_dir / "config.json"
+        try: return json.loads(p.read_text(encoding="utf-8"))
+        except Exception: return {"api":{"base":"http://127.0.0.1:18124"}}
 
-        def build_tabs():
+    def _build_frames(self):
+        top = ttk.Frame(self.root, padding=8); top.pack(side="top", fill="x")
+        grid = ttk.Frame(self.root, padding=8); grid.pack(side="top", fill="both", expand=True)
+        ttk.Label(top, text="ChameleFX Manager", font=("Segoe UI", 14, "bold")).pack(side="left")
+        self.led_api = self.ui.make_led(top); self.led_api.pack(side="left", padx=8)
+        self.lbl_api = ttk.Label(top, text="API: …"); self.lbl_api.pack(side="left")
+        left = ttk.Frame(grid); left.pack(side="left", fill="both", expand=True)
+        right = ttk.Frame(grid); right.pack(side="left", fill="both", expand=True)
+        return {"header": top, "grid": {"connectivity": left, "positions": right}, "left": left, "right": right}
+
+    def _discover_modules(self) -> List[str]:
+        """Prefer new chamelefx.manager_core.components; fallback to legacy Manager_Components."""
+        import sys
+        mods: List[str] = []
+
+        # NEW canonical path
+        new_dir = self.root_dir / "chamelefx" / "manager_core" / "components"
+        new_pkg = "chamelefx.manager_core.components"
+        (new_dir.parent / "__init__.py").write_text("", encoding="utf-8")  # manager_core
+        (new_dir / "__init__.py").write_text("", encoding="utf-8")        # components
+        if str(self.root_dir) not in sys.path:
+            sys.path.insert(0, str(self.root_dir))
+        if new_dir.exists():
+            for _, modname, ispkg in pkgutil.iter_modules([str(new_dir)]):
+                if not ispkg and not modname.startswith("_"):
+                    mods.append(f"{new_pkg}.{modname}")
+
+        # LEGACY fallback
+        legacy_dir = self.root_dir / "Manager_Components"
+        if legacy_dir.exists():
+            (legacy_dir / "__init__.py").write_text("", encoding="utf-8")
+            for _, modname, ispkg in pkgutil.iter_modules([str(legacy_dir)]):
+                if not ispkg and not modname.startswith("_"):
+                    mods.append(f"Manager_Components.{modname}")
+
+        return mods
+
+    def _load_components(self):
+        for module_path in self._discover_modules():
             try:
-                # remove placeholder
-                idx = self.notebook.index("end")-1
-                self.notebook.forget(idx)
-            except Exception:
-                pass
+                mod = importlib.import_module(module_path)
+                comp = mod.register(self) if hasattr(mod,"register") else (mod.Component(self) if hasattr(mod,"Component") else None)
+                if comp and hasattr(comp,"attach"): comp.attach(self)
+                if comp and hasattr(comp,"mount"):  comp.mount(self)
+                if comp: self.components.append(comp)
+                self.logger.info("Loaded %s", module_path)
+            except Exception as e:
+                self.logger.exception("component_load_error")
+                print(f"[Manager] NOT loaded {module_path}: {e!r}")
 
-            # Customer
-            tab_customer = tk.Frame(self.notebook)
-            if CustomerDashboard is None:
-                msg = tk.Message(
-                    tab_customer, width=820,
-                    text=("CustomerDashboard import failed (chamelefx.ui.dashboard).\n\n"
-                          f"Error: {repr(_DASHBOARD_IMPORT_ERR) if '_DASHBOARD_IMPORT_ERR' in globals() else 'unknown'}\n\n"
-                          "Make sure chamelefx/ui/dashboard.py exists and compiles.")
-                )
-                msg.pack(padx=20, pady=20, anchor="center")
-            else:
-                CustomerDashboard(tab_customer).pack(fill="both", expand=True)
-            self.notebook.add(tab_customer, text="Customer")
+    def _refresh_loop(self):
+        try:
+            h = self.api.get("/health")
+            ok = bool(h.get("ok"))
+            self.led_api.set_color("lime" if ok else "red")
+            self.lbl_api.config(text=f"API: {'UP' if ok else 'DOWN'}")
+        except Exception:
+            self.led_api.set_color("red"); self.lbl_api.config(text="API: DOWN")
 
-            # Alpha
-            tab_alpha = tk.Frame(self.notebook)
-            if AlphaTab is None:
-                msg = tk.Message(
-                    tab_alpha, width=820,
-                    text=("AlphaTab import failed (chamelefx.ui.alpha_tab).\n\n"
-                          f"Error: {repr(_ALPHA_IMPORT_ERR) if '_ALPHA_IMPORT_ERR' in globals() else 'unknown'}\n\n"
-                          "Make sure chamelefx/ui/alpha_tab.py exists and compiles.")
-                )
-                msg.pack(padx=20, pady=20, anchor="center")
-            else:
-                AlphaTab(tab_alpha).pack(fill="both", expand=True)
-            self.notebook.add(tab_alpha, text="Alpha")
+        now = time.monotonic()
+        for c in list(self.components):
+            try: c.refresh(now)
+            except Exception: self.logger.exception("component_refresh_error")
 
-            # Exec
-            tab_exec = tk.Frame(self.notebook)
-            if ExecTab is None:
-                msg = tk.Message(
-                    tab_exec, width=820,
-                    text=("ExecTab import failed (chamelefx.ui.exec_tab).\n\n"
-                          f"Error: {repr(_EXEC_IMPORT_ERR) if '_EXEC_IMPORT_ERR' in globals() else 'unknown'}\n\n"
-                          "Make sure chamelefx/ui/exec_tab.py exists and compiles.")
-                )
-                msg.pack(padx=20, pady=20, anchor="center")
-            else:
-                ExecTab(tab_exec, self.api_entry).pack(fill="both", expand=True)
-            self.notebook.add(tab_exec, text="Execution")
-
-            # Analytics
-            tab_analytics = tk.Frame(self.notebook)
-            if AnalyticsTab is None:
-                msg = tk.Message(
-                    tab_analytics, width=820,
-                    text=("AnalyticsTab import failed (chamelefx.ui.analytics_tab).\n\n"
-                          f"Error: {repr(_ANALYTICS_IMPORT_ERR) if '_ANALYTICS_IMPORT_ERR' in globals() else 'unknown'}\n\n"
-                          "Make sure chamelefx/ui/analytics_tab.py exists and compiles.")
-                )
-                msg.pack(padx=20, pady=20, anchor="center")
-            else:
-                AnalyticsTab(tab_analytics, self.api_entry).pack(fill="both", expand=True)
-            self.notebook.add(tab_analytics, text="Analytics")
-
-            # Dump
-            tab_dump = tk.Frame(self.notebook)
-            if DumpBoard is None:
-                msg = tk.Message(
-                    tab_dump, width=820,
-                    text=("DumpBoard import failed (chamelefx.ui.dumpboard).\n\n"
-                          f"Error: {repr(_DUMP_IMPORT_ERR) if '_DUMP_IMPORT_ERR' in globals() else 'unknown'}\n\n"
-                          "Make sure chamelefx/ui/dumpboard.py exists and compiles.")
-                )
-                msg.pack(padx=20, pady=20, anchor="center")
-            else:
-                DumpBoard(tab_dump).pack(fill="both", expand=True)
-            self.notebook.add(tab_dump, text="Dump")
-
-        # build after the mainloop has had time to paint
-        self.after(200, build_tabs)
+        self.root.after(self.refresh_ms, self._refresh_loop)
 
 def main():
-    app = ManagerApp()
-    app.mainloop()
+    m = Manager()
+    m.root.mainloop()
+
 if __name__ == "__main__":
     main()
-class AlertsTab(ttk.Frame):
-    def __init__(self, master, api_entry, **kw):
-        super().__init__(master, **kw)
-        self.api_entry = api_entry
-        import tkinter as tk
-        from tkinter import ttk
-        top = ttk.Frame(self); top.pack(fill='x', padx=6, pady=6)
-        ttk.Button(top, text='Refresh', command=self.refresh).pack(side='left')
-        ttk.Button(top, text='Ack Selected', command=self.ack_selected).pack(side='left', padx=6)
-        cols=('severity','code','message','ts','tip')
-        self.tbl = ttk.Treeview(self, columns=cols, show='headings', height=14)
-        for c in cols: self.tbl.heading(c, text=c); self.tbl.column(c, width=140, stretch=True)
-        self.tbl.pack(fill='both', expand=True, padx=6, pady=6)
-        ac = ttk.LabelFrame(self, text='Action Center'); ac.pack(fill='x', padx=6, pady=6)
-        ttk.Button(ac, text='⛔ Pause (Killswitch 60m)', command=lambda: self._action('killswitch_on', {'minutes':60})).pack(side='left', padx=4)
-        ttk.Button(ac, text='▶ Resume', command=lambda: self._action('killswitch_off', {})).pack(side='left', padx=4)
-        ttk.Button(ac, text='➖ Cut Size 50%', command=lambda: self._action('size_cut', {'percent':50.0})).pack(side='left', padx=4)
-        ttk.Button(ac, text='🛡 DD Throttle 50%', command=lambda: self._action('dd_throttle_on', {'throttle_pct':50.0})).pack(side='left', padx=4)
-        ttk.Button(ac, text='📰 Lift Blackout', command=lambda: self._action('blackout_off', {})).pack(side='left', padx=4)
-        ttk.Button(ac, text='🚫 Disable Strategy…', command=self._disable_selected_strategy).pack(side='left', padx=8)
+'@ | Set-Content $mp -Encoding UTF8
 
-    def _base(self): return self.api_entry.get().strip() if hasattr(self,'api_entry') else 'http://127.0.0.1:18124'
-    def refresh(self):
-        import requests
-        base = self._base()
-        try:
-            j = requests.post(base+'/alerts/refresh', json={'base_url': base}, timeout=4.0).json()
-        except Exception:
-            j = None
-        if not (j and j.get('ok')):
-            # try just status
-            try:
-                j = requests.get(base+'/alerts/status', timeout=3.0).json()
-            except Exception:
-                j = None
-        for iid in self.tbl.get_children(): self.tbl.delete(iid)
-        if not j: return
-        for a in (j.get('alerts') or []):
-            self.tbl.insert('', 'end', values=(a.get('severity',''), a.get('code',''), a.get('message',''), a.get('ts',''), a.get('tip','')))
-    def ack_selected(self):
-        import requests
-        base = self._base(); sel=self.tbl.selection()
-        if not sel: return
-        codes=list({self.tbl.item(iid,'values')[1] for iid in sel})
-        try:
-            requests.post(base+'/alerts/ack', json=codes, timeout=3.0)
-        except Exception:
-            pass
-        self.refresh()
-
-    def _action(self, route: str, payload: dict):
-        import requests
-        base = self._base()
-        try:
-            r = requests.post(base+f"/actions/{route}", json=payload, timeout=4.0).json()
-        except Exception as e:
-            r = {'ok': False, 'error': repr(e)}
-        self.refresh()
-        return r
-    def _disable_selected_strategy(self):
-        # If an alert row contains a strategy name in message, try to parse it
-        sel = self.tbl.selection()
-        if not sel: return
-        msg = self.tbl.item(sel[0],'values')[2]
-        # naive parse: look for 'STRAT:' markers or first token
-        name = None
-        if 'STRAT:' in msg:
-            try: name = msg.split('STRAT:')[1].split()[0].strip().strip(',')
-            except Exception: name = None
-        if not name:
-            # fallback ask user via simple prompt (best-effort)
-            try:
-                import tkinter.simpledialog as sd
-                name = sd.askstring('Disable Strategy', 'Strategy name to disable:')
-            except Exception:
-                name = None
-        if not name: return
-        self._action('strategy_disable', {'name': name})
+# quick syntax check
+.\py-portable\python\python.exe -c "import py_compile; py_compile.compile(r'chamelefx\manager.py', doraise=True)"
+Write-Host "[OK] manager.py patched for chamelefx.manager_core.components"
